@@ -37,6 +37,10 @@ foreach ($spec in $Engines) {
     } elseif ($Known.ContainsKey($spec)) {
         $n = $spec
         $fcArgs += '-engine', "cmd=$($Known[$spec])", "name=$n"
+    } elseif (Test-Path "$Root\engines\$spec.nnue") {
+        # A network-only version: the shared NNUE build loads this version's network file.
+        $n = $spec
+        $fcArgs += '-engine', "cmd=$Root\engines\pawnstorm-nnue.exe", "name=$n", "option.EvalFile=$Root\engines\$spec.nnue"
     } else {
         $path = "$Root\engines\$spec.exe"
         if (-not (Test-Path $path)) { throw "Engine not found: $path" }

@@ -4,7 +4,9 @@
 param(
     [Parameter(Mandatory)][string[]]$Sources,
     [Parameter(Mandatory)][string]$Name,
-    [int]$ShuffleMemMb = 8000
+    [int]$ShuffleMemMb = 8000,
+    # Stop after this many positions (0 = use everything).
+    [int64]$MaxPositions = 0
 )
 
 . "$PSScriptRoot\paths.ps1"
@@ -28,12 +30,15 @@ foreach ($src in $Sources) {
         $reader = [IO.StreamReader]::new($stream)
         $prev = $null
         while ($null -ne ($line = $reader.ReadLine())) {
+            if ($MaxPositions -gt 0 -and $count -ge $MaxPositions) { break }
             if ($null -ne $prev) { $writer.WriteLine($prev); $count++ }
             $prev = $line
         }
-        if ($gz -and $null -ne $prev) { $writer.WriteLine($prev); $count++ }
+        if ($gz -and $null -ne $prev -and ($MaxPositions -le 0 -or $count -lt $MaxPositions)) { $writer.WriteLine($prev); $count++ }
         $reader.Close()
+        if ($MaxPositions -gt 0 -and $count -ge $MaxPositions) { break }
     }
+    if ($MaxPositions -gt 0 -and $count -ge $MaxPositions) { break }
 }
 $writer.Close()
 "Snapshot: $count positions"

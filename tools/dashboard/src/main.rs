@@ -1137,6 +1137,15 @@ impl App {
         if path == "/api/training" {
             return ("200 OK", self.training(), "application/json");
         }
+        if path == "/api/schedule" {
+            let text = std::fs::read_to_string(self.root.join("training").join("schedule.txt")).unwrap_or_default();
+            let fields: Vec<String> = text
+                .lines()
+                .filter_map(|l| l.split_once('='))
+                .map(|(k, v)| format!("{}:{}", js(k.trim()), js(v.trim())))
+                .collect();
+            return ("200 OK", format!("{{{}}}", fields.join(",")), "application/json");
+        }
         if path == "/api/datagen" {
             return ("200 OK", self.datagen(), "application/json");
         }

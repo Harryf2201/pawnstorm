@@ -317,9 +317,30 @@ function lossChart(losses) {
   return s + `<text x="${W - R}" y="${H - 4}" fill="#8b949e" font-size="11" text-anchor="end">training round (superbatch) →</text></svg>`;
 }
 
+let schedule = null;
+
+function renderSchedule() {
+  const s = schedule;
+  if (!s || !s.status) return '';
+  const pos = Number(s.positions || 0), next = Number(s.next_milestone || 0);
+  const done = (s.done || '').split(',').filter(Boolean).map(Number);
+  const prev = done.length ? Math.max(...done.filter(d => d <= pos), 0) : 0;
+  const pct = next ? Math.min(100, 100 * (pos - prev) / Math.max(1, next - prev)) : 100;
+  return `<div class="panel run">
+    <h3>📅 Auto-training schedule</h3>
+    <div class="sub" style="margin-top:4px">A new engine version is trained and rated at every data milestone: 5M, 10M, 20M, 40M, … positions</div>
+    <div class="cards">
+      <div class="card" style="grid-column: span 2"><div class="k">Next version at</div>
+        <div class="v">${next ? big(next) : '–'} <span class="sub" style="font-size:.55em">positions · now ${big(pos)}</span></div>
+        <div class="d">${esc(s.status)}</div><div class="bar" style="height:10px"><div style="width:${pct}%"></div></div></div>
+      <div class="card"><div class="k">Versions trained</div><div class="v">${done.length}</div><div class="d">next is v0.${esc(s.next_version || '?')}</div></div>
+    </div></div>`;
+}
+
 function renderTraining() {
-  if (!trains.length) return '';
-  return `<h2>Network training (GPU)</h2>` + trains.map(t => {
+  const sched = renderSchedule();
+  if (!trains.length) return sched ? `<h2>Network training (GPU)</h2>` + sched : '';
+  return `<h2>Network training (GPU)</h2>` + sched + trains.map(t => {
     const done = t.end_sb ? Math.max(0, t.sb - 1 + (t.pct >= 100 ? 1 : t.pct / 100)) : 0;
     const pct = t.end_sb ? Math.min(100, 100 * done / t.end_sb) : 0;
     const perSb = t.losses.length ? t.total_time / t.losses.length : null;
@@ -347,6 +368,7 @@ async function poll() {
   try {
     health = await (await fetch('/api/health')).json().catch(() => null);
     trains = await (await fetch('/api/training')).json().catch(() => []);
+    schedule = await (await fetch('/api/schedule')).json().catch(() => null);
     trains.sort((a, b) => b.started - a.started);
     gens = await (await fetch('/api/datagen')).json().catch(() => []);
     gens.forEach(trackRate);
