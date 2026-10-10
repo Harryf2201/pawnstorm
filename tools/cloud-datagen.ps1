@@ -41,7 +41,7 @@ try {
     if (-not $run) { throw "Started the workflow but couldn't find its run yet; check the Actions tab." }
     $dir = "$LabRoot\datagen\cloud-$($run.databaseId)"
     New-Item -ItemType Directory -Force $dir | Out-Null
-    [IO.File]::WriteAllLines("$dir\launch.txt", [string[]]@("jobs=$Jobs", "minutes=$Minutes", "soft_nodes=$SoftNodes", "eval=$Eval"))
+    [IO.File]::WriteAllLines("$dir\launch.txt", [string[]]@("jobs=$Jobs", "minutes=$Minutes", "soft_nodes=$SoftNodes", "eval=$Eval", "chain=$Chain"))
     "Started cloud batch: $Jobs jobs x $Minutes min$(if ($Chain) { ", then $Chain more batch(es) back to back" }) -> $($run.url)"
     "The dashboard shows it once tools\cloud-sync.ps1 is running (it downloads data as jobs finish)."
 } finally {

@@ -1,4 +1,4 @@
-﻿# Keeps the dashboard in sync with cloud data generation on GitHub Actions:
+# Keeps the dashboard in sync with cloud data generation on GitHub Actions:
 #  - writes testing\datagen\cloud-<run id>\status.txt (jobs running/done, positions so far)
 #  - downloads each finished job's data (gzipped text, same format as the local generator)
 #  - if GitHub reports throttling, usage limits or account warnings, it stops syncing,
@@ -59,6 +59,18 @@ function Sync-Run($run) {
     $id = $run.databaseId
     $dir = "$DataRoot\cloud-$id"
     New-Item -ItemType Directory -Force $dir | Out-Null
+    # A chained follow-up batch (started by GitHub, not cloud-datagen.ps1) inherits its parent's settings.
+    if (-not (Test-Path "$dir\launch.txt")) {
+        $parent = Get-ChildItem $DataRoot -Directory -Filter 'cloud-*' |
+            Where-Object { [int64]($_.Name -replace '\D', '') -lt $id -and (Test-Path "$($_.FullName)\launch.txt") } |
+            Sort-Object { [int64]($_.Name -replace '\D', '') } | Select-Object -Last 1
+        $pl = if ($parent) { Get-Content "$($parent.FullName)\launch.txt" } else { @() }
+        $pc = $pl | Select-String '^chain=(\d+)'
+        if ($pc -and [int]$pc.Matches[0].Groups[1].Value -gt 0) {
+            $child = $pl | ForEach-Object { if ($_ -match '^chain=(\d+)') { "chain=$([int]$Matches[1] - 1)" } else { $_ } }
+            [IO.File]::WriteAllLines("$dir\launch.txt", [string[]]$child)
+        }
+    }
     $done = @{}
     if (Test-Path "$dir\downloaded.txt") { Get-Content "$dir\downloaded.txt" | ForEach-Object { $done[$_] = $true } }
 
