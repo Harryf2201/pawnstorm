@@ -85,7 +85,7 @@ function Train-Version($milestone, $data, $state) {
         Where-Object { $_ -ne $ver }
     $state.status = "rating $ver against Stockfish $lo/$hi and $($previous.Count) earlier versions"; Write-State $state
     & "$PSScriptRoot\match.ps1" -Name "$ver rating ($(Label $milestone) positions)" -Type gauntlet `
-        -Engines (@($ver, "sf:$lo", "sf:$hi") + $previous) -Rounds 15 -Concurrency 6 -Live `
+        -Engines (@($ver, "sf:$lo", "sf:$hi") + $previous) -Rounds 15 -Concurrency 4 -Live `
         -Notes "network trained on $(Label $milestone) positions, $sb rounds" | ForEach-Object { Log "  $_" }
     $state.next_version = [int]$state.next_version + 1
 }
@@ -111,7 +111,7 @@ while ($true) {
             $next = Milestones | Where-Object { "$_" -notin ($state.done -split ',') } | Select-Object -First 1
             $state.status = "waiting for $(Label $next) positions"
         } elseif ($reached) {
-            $state.status = "milestone $(Label (($reached | Measure-Object -Maximum).Maximum)) reached, waiting for the current tournament/training to finish"
+            $state.status = "next: $(Label (($reached | Measure-Object -Minimum).Minimum)) version (data is ready), waiting for the current tournament/training to finish"
         } else {
             $state.status = "waiting for $(Label $next) positions"
         }
