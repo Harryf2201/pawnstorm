@@ -809,10 +809,13 @@ impl App {
                         while let Some(&n) = chars.peek() {
                             chars.next();
                             if n.is_ascii_alphabetic() {
+                                // Colour codes (…m) vanish; cursor moves separate progress updates.
+                                if n != 'm' {
+                                    text.push('\n');
+                                }
                                 break;
                             }
                         }
-                        text.push('\n');
                     }
                 } else {
                     text.push(c);
