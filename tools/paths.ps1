@@ -5,6 +5,9 @@ $Parent = Split-Path $RepoRoot -Parent
 $LabRoot = Join-Path $Parent 'testing'
 $BulletRoot = Join-Path $Parent 'bullet'
 
+# Use the current system PATH (background processes may have inherited a stale one).
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') + ";$env:USERPROFILE\.cargo\bin"
+
 # Opponent engines used by match.ps1. Override any of these in tools\engines.local.ps1 (not committed).
 $Downloads = Join-Path $HOME 'Downloads'
 $Known = @{
