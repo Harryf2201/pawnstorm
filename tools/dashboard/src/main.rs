@@ -759,172 +759,191 @@ impl App {
         ids
     }
 
-    /// Milestones reached so far plus locked goals still ahead, as JSON.
+    /// Every achievement, unlocked or not, with a category and a difficulty key so the page
+    /// can show each category as a ladder from easiest to hardest.
     fn achievements(&self) -> String {
         let mut ids = self.refresh_all();
         ids.reverse(); // oldest first
         let runs = self.runs.lock().unwrap();
+
         struct Ach {
+            cat: &'static str,
+            key: f64,
             icon: &'static str,
             title: String,
             desc: String,
-            date: u64,
+            date: Option<u64>,
             run: String,
             tier: &'static str,
         }
-        let mut got: Vec<Ach> = Vec::new();
-        let mut have = std::collections::HashSet::new();
-        let mut unlock = |key: String, a: Ach, got: &mut Vec<Ach>| {
-            if have.insert(key) {
-                got.push(a);
-            }
-        };
+        // Keyed by an id so the first (earliest) unlock wins.
+        let mut got: BTreeMap<String, Ach> = BTreeMap::new();
 
-        let mut total_games = 0usize;
-        let mut sprt_passes = 0;
         const RATING_STEPS: [f64; 9] = [2000.0, 2200.0, 2400.0, 2600.0, 2800.0, 3000.0, 3200.0, 3400.0, 3600.0];
         const GAME_STEPS: [usize; 4] = [100, 1000, 10_000, 100_000];
+        const SPRT_STEPS: [usize; 3] = [1, 10, 50];
+        // Opponents worth showing as goals even before we've played them, weakest first.
+        const LADDER: [&str; 8] = ["SF-2000", "SF-2400", "SF-2800", "SF-3000", "rubichess", "dragon", "plentychess", "stockfish"];
+        let full_strength = |name: &str| match name.to_lowercase().as_str() {
+            "rubichess" => Some(3400.0),
+            "dragon" => Some(3550.0),
+            "plentychess" => Some(3600.0),
+            "lc0" => Some(3600.0),
+            "stockfish" => Some(3650.0),
+            _ => None,
+        };
+        let strength = |name: &str| {
+            full_strength(name).or_else(|| name.strip_prefix("SF-").and_then(|e| e.parse().ok())).unwrap_or(0.0)
+        };
+        let is_ours = |name: &str| name.to_lowercase().starts_with("pawnstorm");
+
+        let mut total_games = 0usize;
+        let mut sprt_passes = 0usize;
         for id in &ids {
             let r = &runs[id];
             let main = &r.meta.main;
-            let date = if r.last_activity > 0 { r.last_activity } else { r.meta.created };
+            let date = Some(if r.last_activity > 0 { r.last_activity } else { r.meta.created });
             let finished = r.finished || status(r) == "stopped";
 
-            // First game won against each opponent (counts as soon as it happens, even mid-tournament).
+            // First game won against each opponent (counts the moment it happens).
             for g in &r.games {
-                if result_for(g, main) == Some(1.0) {
-                    let opp = if &g.white == main { &g.black } else { &g.white };
-                    let strong = ["stockfish", "dragon", "plentychess", "rubichess", "lc0"].contains(&opp.to_lowercase().as_str());
-                    unlock(
-                        format!("win:{opp}"),
-                        Ach {
-                            icon: if strong { "🏆" } else { "⚔️" },
-                            title: format!("First win vs {opp}"),
-                            desc: format!("{main} won a game against {opp}{}", g.reason.is_empty().then(String::new).unwrap_or_else(|| format!(" ({})", g.reason))),
-                            date,
-                            run: r.meta.name.clone(),
-                            tier: if strong { "gold" } else { "bronze" },
-                        },
-                        &mut got,
-                    );
+                if result_for(g, main) != Some(1.0) {
+                    continue;
                 }
+                let opp = if &g.white == main { &g.black } else { &g.white };
+                if is_ours(opp) {
+                    continue;
+                }
+                let strong = full_strength(opp).is_some();
+                got.entry(format!("win:{opp}")).or_insert(Ach {
+                    cat: "wins",
+                    key: strength(opp),
+                    icon: if strong { "🏆" } else { "⚔️" },
+                    title: format!("First win vs {opp}"),
+                    desc: if g.reason.is_empty() { format!("{main} won a game") } else { format!("{main} won a game ({})", g.reason) },
+                    date,
+                    run: r.meta.name.clone(),
+                    tier: if strong { "gold" } else { "bronze" },
+                });
             }
 
-            // Outscored an opponent over a whole finished match.
             if finished {
+                // Outscored an opponent over a whole match.
                 let (_, per) = summarize(r);
                 for (opp, c) in &per {
                     let n = c[0] + c[1] + c[2];
                     let score = (c[0] + c[1] / 2.0) / n.max(1.0);
-                    if n >= 10.0 && score > 0.5 {
-                        unlock(
-                            format!("match:{opp}"),
-                            Ach {
-                                icon: "🥇",
-                                title: format!("Beat {opp} in a match"),
-                                desc: format!("Scored {:.0}% over {} games (+{} ={} −{})", score * 100.0, n, c[0], c[1], c[2]),
-                                date,
-                                run: r.meta.name.clone(),
-                                tier: "silver",
-                            },
-                            &mut got,
-                        );
+                    if n >= 10.0 && score > 0.5 && !is_ours(opp) {
+                        got.entry(format!("match:{opp}")).or_insert(Ach {
+                            cat: "matches",
+                            key: strength(opp),
+                            icon: if full_strength(opp).is_some() { "👑" } else { "🥇" },
+                            title: format!("Beat {opp} in a match"),
+                            desc: format!("Scored {:.0}% over {} games (+{} ={} −{})", score * 100.0, n, c[0], c[1], c[2]),
+                            date,
+                            run: r.meta.name.clone(),
+                            tier: if full_strength(opp).is_some() { "gold" } else { "silver" },
+                        });
                     }
                 }
                 if let Some((v, e, _)) = r.rating {
-                    for step in RATING_STEPS {
-                        if v >= step {
-                            unlock(
-                                format!("rating:{step}"),
-                                Ach {
-                                    icon: "📈",
-                                    title: format!("Reached {step:.0} rating"),
-                                    desc: format!("{main} measured at {v:.0} ±{e:.0}"),
-                                    date,
-                                    run: r.meta.name.clone(),
-                                    tier: if step >= 3000.0 { "gold" } else { "silver" },
-                                },
-                                &mut got,
-                            );
-                        }
+                    for step in RATING_STEPS.iter().filter(|&&s| v >= s) {
+                        got.entry(format!("rating:{step}")).or_insert(Ach {
+                            cat: "rating",
+                            key: *step,
+                            icon: "📈",
+                            title: format!("Reached {step:.0} rating"),
+                            desc: format!("{main} measured at {v:.0} ±{e:.0}"),
+                            date,
+                            run: r.meta.name.clone(),
+                            tier: if *step >= 3000.0 { "gold" } else { "silver" },
+                        });
                     }
                 }
             }
 
             if r.verdict.contains("H1") {
                 sprt_passes += 1;
-                if sprt_passes == 1 || sprt_passes == 10 || sprt_passes == 50 {
-                    unlock(
-                        format!("sprt:{sprt_passes}"),
-                        Ach {
-                            icon: "✅",
-                            title: if sprt_passes == 1 { "First improvement proven".into() } else { format!("{sprt_passes} improvements proven") },
-                            desc: format!("Passed SPRT: {}", r.meta.name),
-                            date,
-                            run: r.meta.name.clone(),
-                            tier: "silver",
-                        },
-                        &mut got,
-                    );
+                if SPRT_STEPS.contains(&sprt_passes) {
+                    got.entry(format!("sprt:{sprt_passes}")).or_insert(Ach {
+                        cat: "sprt",
+                        key: sprt_passes as f64,
+                        icon: "✅",
+                        title: if sprt_passes == 1 { "First improvement proven".into() } else { format!("{sprt_passes} improvements proven") },
+                        desc: format!("Passed SPRT: {}", r.meta.name),
+                        date,
+                        run: r.meta.name.clone(),
+                        tier: "silver",
+                    });
                 }
             }
 
             let before = total_games;
             total_games += r.games.iter().filter(|g| result_for(g, main).is_some()).count();
-            for step in GAME_STEPS {
-                if before < step && total_games >= step {
-                    unlock(
-                        format!("games:{step}"),
-                        Ach {
-                            icon: "♟️",
-                            title: format!("{step} games played"),
-                            desc: "Across all tests".into(),
-                            date,
-                            run: r.meta.name.clone(),
-                            tier: "bronze",
-                        },
-                        &mut got,
-                    );
-                }
+            for step in GAME_STEPS.iter().filter(|&&s| before < s && total_games >= s) {
+                got.entry(format!("games:{step}")).or_insert(Ach {
+                    cat: "games",
+                    key: *step as f64,
+                    icon: "♟️",
+                    title: format!("{step} games played"),
+                    desc: "Across all tests".into(),
+                    date,
+                    run: r.meta.name.clone(),
+                    tier: "bronze",
+                });
             }
         }
 
         // Goals still ahead.
-        let mut locked: Vec<(String, String, String)> = Vec::new();
+        let locked = |cat, key, icon, title: String, desc: String| Ach {
+            cat,
+            key,
+            icon,
+            title,
+            desc,
+            date: None,
+            run: String::new(),
+            tier: "",
+        };
         for step in RATING_STEPS {
-            if !got.iter().any(|a| a.title == format!("Reached {step:.0} rating")) {
-                locked.push(("📈".into(), format!("Reach {step:.0} rating"), "Confirmed by a finished rating test".into()));
-            }
+            got.entry(format!("rating:{step}"))
+                .or_insert_with(|| locked("rating", step, "📈", format!("Reach {step:.0} rating"), "Confirmed by a finished rating test".into()));
         }
-        for opp in ["stockfish", "dragon", "plentychess", "rubichess"] {
-            if !got.iter().any(|a| a.title == format!("First win vs {opp}")) {
-                locked.push(("🏆".into(), format!("Win a game vs {opp}"), "Full-strength engine".into()));
-            }
+        for opp in LADDER {
+            let s = strength(opp);
+            let what = if full_strength(opp).is_some() { "Full-strength engine" } else { "Stockfish limited by UCI_Elo" };
+            got.entry(format!("win:{opp}"))
+                .or_insert_with(|| locked("wins", s, "⚔️", format!("Win a game vs {opp}"), what.into()));
+            got.entry(format!("match:{opp}")).or_insert_with(|| {
+                locked("matches", s, "🥇", format!("Beat {opp} in a match"), format!("{what}; score over 50% in 10+ games"))
+            });
         }
         for step in GAME_STEPS {
-            if total_games < step {
-                locked.push(("♟️".into(), format!("{step} games played"), format!("{total_games} so far")));
-            }
+            got.entry(format!("games:{step}"))
+                .or_insert_with(|| locked("games", step as f64, "♟️", format!("{step} games played"), format!("{total_games} so far")));
+        }
+        for step in SPRT_STEPS {
+            let title = if step == 1 { "First improvement proven".to_string() } else { format!("{step} improvements proven") };
+            got.entry(format!("sprt:{step}"))
+                .or_insert_with(|| locked("sprt", step as f64, "✅", title, format!("Changes that passed an SPRT test ({sprt_passes} so far)")));
         }
 
-        got.sort_by_key(|a| std::cmp::Reverse(a.date));
-        let mut o = String::from("{\"unlocked\":[");
-        for (i, a) in got.iter().enumerate() {
+        let mut o = String::from("{\"items\":[");
+        for (i, a) in got.values().enumerate() {
             let _ = write!(
                 o,
-                "{}{{\"icon\":{},\"title\":{},\"desc\":{},\"date\":{},\"run\":{},\"tier\":{}}}",
+                "{}{{\"cat\":{},\"key\":{},\"icon\":{},\"title\":{},\"desc\":{},\"date\":{},\"run\":{},\"tier\":{},\"unlocked\":{}}}",
                 if i > 0 { "," } else { "" },
+                js(a.cat),
+                num(a.key),
                 js(a.icon),
                 js(&a.title),
                 js(&a.desc),
-                a.date,
+                a.date.map_or("null".into(), |d| d.to_string()),
                 js(&a.run),
-                js(a.tier)
+                js(a.tier),
+                a.date.is_some()
             );
-        }
-        o.push_str("],\"locked\":[");
-        for (i, (icon, t, d)) in locked.iter().enumerate() {
-            let _ = write!(o, "{}{{\"icon\":{},\"title\":{},\"desc\":{}}}", if i > 0 { "," } else { "" }, js(icon), js(t), js(d));
         }
         o.push_str("]}");
         o

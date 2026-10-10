@@ -89,10 +89,12 @@
   nav button.active { background: var(--panel2); color: var(--text); }
   .count { background: var(--accent); color: #0b1220; border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 700; margin-left: 4px; }
   .count:empty { display: none; }
-  .ach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-  .ach { display: flex; gap: 14px; align-items: flex-start; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
-  .ach .ic { font-size: 28px; line-height: 1; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--panel2); flex: none; }
-  .ach .t { font-weight: 700; } .ach .d { color: var(--muted); font-size: 12px; margin-top: 2px; } .ach .w { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .ach-list { display: flex; flex-direction: column; gap: 8px; }
+  .ach { display: flex; gap: 16px; align-items: center; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; }
+  .ach .ic { font-size: 24px; line-height: 1; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--panel2); flex: none; }
+  .ach .body { flex: 1; min-width: 0; }
+  .ach .t { font-weight: 700; font-size: 15px; } .ach .d { color: var(--muted); font-size: 13px; margin-top: 1px; }
+  .ach .w { color: var(--muted); font-size: 12px; text-align: right; flex: none; }
   .ach.gold { border-color: rgba(227,179,65,.6); background: linear-gradient(135deg, rgba(227,179,65,.12), var(--panel) 60%); }
   .ach.gold .ic { background: rgba(227,179,65,.18); }
   .ach.silver { border-color: rgba(173,186,199,.45); } .ach.silver .ic { background: rgba(173,186,199,.12); }
@@ -138,21 +140,37 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   render();
 });
 
+const CATEGORIES = [
+  ['rating', 'Rating milestones'],
+  ['wins', 'First wins'],
+  ['matches', 'Match victories'],
+  ['sprt', 'Proven improvements'],
+  ['games', 'Games played'],
+];
+
 function renderAchievements() {
   if (!ach) return '<div class="empty">Loading…</div>';
-  const card = (a, locked) => `<div class="ach ${locked ? 'locked' : a.tier}"><div class="ic">${a.icon}</div><div>
-    <div class="t">${esc(a.title)}</div><div class="d">${esc(a.desc)}</div>
-    ${locked ? '<div class="w">🔒 not yet</div>' : `<div class="w">${when(a.date)} · ${esc(a.run)}</div>`}</div></div>`;
-  return `<h2 style="margin-top:8px">Unlocked (${ach.unlocked.length})</h2>
-    ${ach.unlocked.length ? `<div class="ach-grid">${ach.unlocked.map(a => card(a, false)).join('')}</div>` : '<div class="empty">Nothing yet. Run some tournaments!</div>'}
-    <h2>Still to come (${ach.locked.length})</h2><div class="ach-grid">${ach.locked.map(a => card(a, true)).join('')}</div>`;
+  const total = ach.items.length, done = ach.items.filter(a => a.unlocked).length;
+  const row = a => `<div class="ach ${a.unlocked ? a.tier : 'locked'}"><div class="ic">${a.icon}</div>
+    <div class="body"><div class="t">${esc(a.title)}</div><div class="d">${esc(a.desc)}</div></div>
+    <div class="w">${a.unlocked ? `<span class="pos">✓ ${when(a.date)}</span><br>${esc(a.run)}` : '🔒 not yet'}</div></div>`;
+  return `<div class="panel" style="display:flex;align-items:center;gap:20px;margin-top:8px">
+      <div><div class="rating-label">Achievements</div><div class="rating" style="font-size:44px">${done}<small> / ${total}</small></div></div>
+      <div style="flex:1"><div class="bar" style="height:10px"><div style="width:${100 * done / Math.max(1, total)}%"></div></div></div>
+    </div>` +
+    CATEGORIES.map(([cat, label]) => {
+      const items = ach.items.filter(a => a.cat === cat).sort((a, b) => a.key - b.key);
+      if (!items.length) return '';
+      const n = items.filter(a => a.unlocked).length;
+      return `<h2>${label} <span class="sub" style="text-transform:none;letter-spacing:0">· ${n} of ${items.length}</span></h2><div class="ach-list">${items.map(row).join('')}</div>`;
+    }).join('');
 }
 
 async function poll() {
   try {
     runs = await (await fetch('/api/runs')).json();
     ach = await (await fetch('/api/achievements')).json();
-    $('#ach-count').textContent = ach.unlocked.length || '';
+    $('#ach-count').textContent = ach.items.filter(a => a.unlocked).length || '';
     const want = runs.filter(r => r.status === 'running' || expanded.has(r.id)).map(r => r.id);
     const got = await Promise.all(want.map(id => fetch('/api/run/' + encodeURIComponent(id)).then(r => r.json()).catch(() => null)));
     details = {};
