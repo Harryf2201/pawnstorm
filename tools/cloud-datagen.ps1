@@ -1,8 +1,9 @@
 # Starts one batch of cloud data generation on GitHub Actions (see .github/workflows/datagen.yml).
 # Refuses to start if a batch is already running or queued, so only one batch is ever in flight.
-# Usage: .\tools\cloud-datagen.ps1 [-Jobs 20] [-Minutes 330]
+# Usage: .\tools\cloud-datagen.ps1 [-Jobs 6] [-Minutes 330]
+# GitHub ran at most 6 jobs at once on this account, so the default batch is 6 (more would just queue).
 param(
-    [ValidateRange(1, 20)][int]$Jobs = 20,
+    [ValidateRange(1, 20)][int]$Jobs = 6,
     [ValidateRange(10, 340)][int]$Minutes = 330,
     [int]$SoftNodes = 5000
 )

@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       jobs:
-        description: "Parallel jobs (max 20)"
-        default: "20"
+        description: "Parallel jobs (max 20; this account gets 6 at once)"
+        default: "6"
       minutes:
         description: "Minutes of generation per job (keep under ~340: jobs are capped at 6 hours)"
         default: "330"
