@@ -583,6 +583,54 @@ impl Board {
         found
     }
 
+    /// Standard algebraic notation for a legal move, without the check/mate suffix (e.g. "Nbd7", "exd5", "e8=Q", "O-O").
+    pub fn to_san(&self, mv: Move) -> String {
+        if mv.is_castle() {
+            return if mv.flag() == Move::KING_CASTLE { "O-O".into() } else { "O-O-O".into() };
+        }
+        let (from, to) = (mv.from(), mv.to());
+        let pt = self.mailbox[from] as usize % 6;
+        let dest = sq_name(to);
+        if pt == PAWN {
+            let mut s = if mv.is_capture() { format!("{}x{dest}", (b'a' + (from & 7) as u8) as char) } else { dest };
+            if mv.is_promo() {
+                s.push('=');
+                s.push(b"NBRQ"[mv.promo_piece() - 1] as char);
+            }
+            return s;
+        }
+        let mut s = String::from(b"PNBRQK"[pt] as char);
+        // Disambiguate between identical pieces that can also reach the destination.
+        let rivals: Vec<usize> = self
+            .legal_moves()
+            .into_iter()
+            .filter(|m| m.to() == to && m.from() != from && self.mailbox[m.from()] == self.mailbox[from])
+            .map(|m| m.from())
+            .collect();
+        if !rivals.is_empty() {
+            let file = sq_name(from).chars().next().unwrap();
+            let rank = sq_name(from).chars().nth(1).unwrap();
+            if rivals.iter().all(|&r| r & 7 != from & 7) {
+                s.push(file);
+            } else if rivals.iter().all(|&r| r >> 3 != from >> 3) {
+                s.push(rank);
+            } else {
+                s.push(file);
+                s.push(rank);
+            }
+        }
+        if mv.is_capture() {
+            s.push('x');
+        }
+        s + &dest
+    }
+
+    /// Finds the legal move for a SAN string such as "Nf3", "exd5", "O-O+", "e8=Q#".
+    pub fn parse_san(&self, san: &str) -> Option<Move> {
+        let clean: String = san.trim().trim_end_matches(['+', '#', '!', '?']).replace('0', "O");
+        self.legal_moves().into_iter().find(|&m| self.to_san(m) == clean)
+    }
+
     pub fn legal_moves(&self) -> Vec<Move> {
         let mut list = MoveList::new();
         self.gen_moves(&mut list, false);

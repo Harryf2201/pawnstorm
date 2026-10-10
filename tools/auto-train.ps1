@@ -79,9 +79,13 @@ function Train-Version($milestone, $data, $state) {
     $r = Current-Rating
     $lo = [int][math]::Max(1400, [math]::Min(3000, [math]::Round(($r - 200) / 100) * 100))
     $hi = [int][math]::Max(1600, [math]::Min(3190, [math]::Round(($r + 200) / 100) * 100))
-    $state.status = "rating $ver"; Write-State $state
+    # Play every earlier version too: the dashboard rates all versions jointly from every game,
+    # so these games sharpen the ratings of the old versions as well as the new one.
+    $previous = @('pawnstorm-v0.1', 'pawnstorm-v0.2') + @(Get-ChildItem "$LabRoot\engines\*.nnue" | Sort-Object CreationTime | ForEach-Object BaseName) |
+        Where-Object { $_ -ne $ver }
+    $state.status = "rating $ver against Stockfish $lo/$hi and $($previous.Count) earlier versions"; Write-State $state
     & "$PSScriptRoot\match.ps1" -Name "$ver rating ($(Label $milestone) positions)" -Type gauntlet `
-        -Engines $ver, "sf:$lo", "sf:$hi", 'pawnstorm-v0.1' -Rounds 30 -Concurrency 6 -Live `
+        -Engines (@($ver, "sf:$lo", "sf:$hi") + $previous) -Rounds 15 -Concurrency 6 -Live `
         -Notes "network trained on $(Label $milestone) positions, $sb rounds" | ForEach-Object { Log "  $_" }
     $state.next_version = [int]$state.next_version + 1
 }

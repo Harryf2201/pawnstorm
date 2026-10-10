@@ -3,5 +3,13 @@ name = "dashboard"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "dashboard"
+path = "src/main.rs"
+
+[[bin]]
+name = "verify-games"
+path = "src/verify.rs"
+
 [dependencies]
 pawnstorm = { path = "../.." }

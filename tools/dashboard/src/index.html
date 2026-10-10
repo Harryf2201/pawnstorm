@@ -24,6 +24,10 @@
   .pos { color: var(--good); } .neg { color: var(--bad); } .warnc { color: var(--warn); }
   .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; font: inherit; font-weight: 600; cursor: pointer; }
   .btn:hover { border-color: var(--accent); }
+  h2.sec { cursor: pointer; user-select: none; }
+  h2.sec:hover { color: var(--text); }
+  h2 .chev { display: inline-block; width: 16px; }
+  h2 .secsum { text-transform: none; letter-spacing: 0; font-weight: 500; }
 
   /* Rating hero */
   .hero { display: grid; grid-template-columns: minmax(280px, 1fr) 2fr; gap: 16px; }
@@ -375,6 +379,7 @@ async function poll() {
     // Running generators first, then newest.
     gens.sort((a, b) => ((b.state === 'running') - (a.state === 'running')) || (b.started - a.started));
     runs = await (await fetch('/api/runs')).json();
+    ratings = await (await fetch('/api/ratings')).json().catch(() => []);
     ach = await (await fetch('/api/achievements')).json();
     $('#ach-count').textContent = ach.items.filter(a => a.unlocked).length || '';
     const want = runs.filter(r => r.status === 'running' || expanded.has(r.id)).map(r => r.id);
@@ -386,6 +391,26 @@ async function poll() {
   } catch (e) {
     $('#updated').innerHTML = '<span class="neg">Dashboard server not reachable</span>';
   }
+}
+
+// Collapsible sections: the user's choice is remembered; otherwise each section has a sensible default.
+let collapsed = {};
+try { collapsed = JSON.parse(localStorage.getItem('collapsed') || '{}'); } catch (e) {}
+
+function applyCollapse(id, summary, defaultCollapsed, forceOpen) {
+  const sec = document.getElementById(id);
+  const h = sec && sec.querySelector('h2');
+  if (!h) return;
+  const isCol = !forceOpen && (id in collapsed ? collapsed[id] : defaultCollapsed);
+  h.classList.add('sec');
+  h.insertAdjacentHTML('afterbegin', `<span class="chev">${isCol ? '▸' : '▾'}</span>`);
+  if (isCol && summary) h.insertAdjacentHTML('beforeend', `<span class="secsum"> · ${summary}</span>`);
+  [...sec.children].forEach(c => { if (c !== h) c.style.display = isCol ? 'none' : ''; });
+  h.onclick = () => {
+    collapsed[id] = !isCol;
+    try { localStorage.setItem('collapsed', JSON.stringify(collapsed)); } catch (e) {}
+    render();
+  };
 }
 
 function render() {
@@ -412,30 +437,32 @@ function render() {
     expanded.has(id) ? expanded.delete(id) : expanded.add(id);
     render(); poll();
   });
+
+  // One-line summaries shown next to collapsed section titles.
+  const h = health;
+  const healthBad = h && h.updated && (h.level !== 'ok' || h.now - h.updated > 30);
+  applyCollapse('health', h && h.updated ? `${h.level === 'ok' ? '✓ all good' : esc(h.level)} · CPU ${h.cpu_temp ?? '–'}°C · GPU ${h.gpu_temp ?? '–'}°C` : 'watchdog not running', true, healthBad || !(h && h.updated));
+  const genRunning = gens.filter(g => g.state === 'running' && (g.source === 'cloud' || g.now - g.updated < 15));
+  const totalPos = gens.reduce((s, g) => s + (g.positions || 0), 0);
+  applyCollapse('datagen', `${big(totalPos)} positions · ${genRunning.length ? genRunning.length + ' generator' + (genRunning.length > 1 ? 's' : '') + ' running' : 'idle'}`, false);
+  const training = trains.some(t => t.state === 'running');
+  applyCollapse('training', training ? 'training now' : `idle${schedule && schedule.next_milestone ? ' · next version at ' + big(Number(schedule.next_milestone)) + ' positions' : ''}`, !training);
+  applyCollapse('ongoing', `${live.length} running`, false);
+  applyCollapse('finished', `${done.length} tournaments`, false);
 }
 
 // "Pawnstorm-0.1" and "pawnstorm-v0.1" are the same version.
 const versionKey = name => name.toLowerCase().replace(/[^a-z0-9.]/g, '').replace(/(\D)v(\d)/, '$1$2');
 
-/// One point per engine version: all of its rated tests combined (inverse-variance weighted).
+let ratings = [];
+
+/// One point per engine version, from the server's joint fit over every game ever played
+/// (Stockfish levels are fixed anchors), so older versions keep refining as new games arrive.
 function versions() {
-  const groups = new Map();
-  runs.filter(r => r.perf != null && r.perf_err > 0).sort((a, b) => a.created - b.created).forEach(r => {
-    const k = versionKey(r.main);
-    if (!groups.has(k)) groups.set(k, { main: r.main, tests: [], created: r.created });
-    groups.get(k).tests.push(r);
-  });
-  return [...groups.values()].map(g => {
-    const wsum = g.tests.reduce((s, t) => s + 1 / t.perf_err ** 2, 0);
-    return {
-      main: g.main, created: g.created, tests: g.tests,
-      perf: g.tests.reduce((s, t) => s + t.perf / t.perf_err ** 2, 0) / wsum,
-      perf_err: 1 / Math.sqrt(wsum),
-      games: g.tests.reduce((s, t) => s + t.games, 0),
-      status: g.tests.some(t => t.status === 'running') ? 'running' : 'finished',
-      name: g.tests.length === 1 ? g.tests[0].name : `${g.tests.length} tests`,
-    };
-  });
+  return ratings.filter(r => /^pawnstorm/i.test(r.name)).map(r => ({
+    main: r.name, created: r.first_seen, perf: r.rating, perf_err: r.err, games: r.games,
+    status: r.live ? 'running' : 'finished', name: `${r.games} games`,
+  }));
 }
 
 function renderRating() {
@@ -449,7 +476,7 @@ function renderRating() {
     <div class="panel">
       <div class="rating-label">Pawnstorm rating ${live ? '<span class="live-badge"><span class="dot running"></span>LIVE · updating as games finish</span>' : ''}</div>
       <div class="rating">${cur.perf.toFixed(0)} <small>±${cur.perf_err.toFixed(0)}</small></div>
-      <div class="sub">${esc(cur.main)} · ${cur.games} rated games from ${cur.tests.length} test${cur.tests.length > 1 ? 's' : ''}</div>
+      <div class="sub">${esc(cur.main)} · ${cur.games} rated games · all versions are rated together from every game played, so earlier versions keep refining</div>
       <div class="facts">
         <div class="fact"><div class="k">Change vs previous version</div><div class="v delta ${cls(delta)}">${delta == null ? '–' : sign(delta)}</div></div>
         <div class="fact"><div class="k">Best confirmed</div><div class="v">${best === -Infinity ? '–' : best.toFixed(0)}</div></div>

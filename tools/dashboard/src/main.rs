@@ -459,6 +459,126 @@ fn perf_rating(opps: &[(f64, [f64; 3])]) -> Option<(f64, f64)> {
     Some((r, err))
 }
 
+/// "Pawnstorm-0.1" and "pawnstorm-v0.1" are the same engine; "pawnstorm-v0.3-10m" stays distinct.
+fn engine_key(name: &str) -> String {
+    let s: String = name.to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    for (i, &c) in b.iter().enumerate() {
+        // drop a "v" sitting between a letter and a digit ("pawnstormv0.1" -> "pawnstorm0.1")
+        if c == b'v' && i > 0 && !b[i - 1].is_ascii_digit() && b.get(i + 1).is_some_and(|n| n.is_ascii_digit()) {
+            continue;
+        }
+        out.push(c as char);
+    }
+    out
+}
+
+struct Rated {
+    name: String,
+    rating: f64,
+    err: f64,
+    games: f64,
+    first_seen: u64,
+    live: bool,
+}
+
+/// One joint maximum-likelihood fit over every game in every run. Anchor engines (Elo-limited
+/// Stockfish) keep their fixed ratings; everyone else is solved together, so new games against a
+/// version refine its rating retroactively and version-vs-version games count for both sides.
+fn global_ratings(runs: &HashMap<String, RunState>) -> Vec<Rated> {
+    let mut idx: HashMap<String, usize> = HashMap::new();
+    let mut names: Vec<String> = Vec::new();
+    let mut anchor: Vec<Option<f64>> = Vec::new();
+    let mut first_seen: Vec<u64> = Vec::new();
+    let mut live: Vec<bool> = Vec::new();
+    let id_of = |n: &str, t: u64, running: bool, idx: &mut HashMap<String, usize>, names: &mut Vec<String>, anchor: &mut Vec<Option<f64>>, first_seen: &mut Vec<u64>, live: &mut Vec<bool>| {
+        let k = engine_key(n);
+        let i = *idx.entry(k).or_insert_with(|| {
+            names.push(n.to_string());
+            anchor.push(None);
+            first_seen.push(t);
+            live.push(false);
+            names.len() - 1
+        });
+        first_seen[i] = first_seen[i].min(t);
+        live[i] |= running;
+        i
+    };
+    // pair (i, j) with i < j -> [wins for i, draws, wins for j]
+    let mut pairs: HashMap<(usize, usize), [f64; 3]> = HashMap::new();
+    for r in runs.values() {
+        let running = status(r) == "running";
+        let t = r.meta.created;
+        for (n, a) in &r.meta.anchors {
+            let i = id_of(n, t, false, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
+            anchor[i] = Some(*a);
+        }
+        for g in &r.games {
+            let s = match g.result.as_str() {
+                "1-0" => 1.0,
+                "0-1" => 0.0,
+                "1/2-1/2" => 0.5,
+                _ => continue,
+            };
+            let w = id_of(&g.white, t, running, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
+            let b = id_of(&g.black, t, running, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
+            if w == b {
+                continue;
+            }
+            let (i, j, si) = if w < b { (w, b, s) } else { (b, w, 1.0 - s) };
+            let e = pairs.entry((i, j)).or_insert([0.0; 3]);
+            e[if si == 1.0 { 0 } else if si == 0.5 { 1 } else { 2 }] += 1.0;
+        }
+    }
+    let n = names.len();
+    let mut rating: Vec<f64> = anchor.iter().map(|a| a.unwrap_or(2500.0)).collect();
+    let k = 400.0 / std::f64::consts::LN_10;
+    let expected = |a: f64, b: f64| 1.0 / (1.0 + 10f64.powf((b - a) / 400.0));
+    let mut info = vec![0.0; n];
+    let mut games = vec![0.0; n];
+    for _ in 0..2000 {
+        let mut grad = vec![0.0; n];
+        info.iter_mut().for_each(|x| *x = 0.0);
+        for (&(i, j), c) in &pairs {
+            // One virtual draw per pairing keeps 100% scores finite.
+            let games_ij = c[0] + c[1] + c[2] + 1.0;
+            let si = c[0] + c[1] / 2.0 + 0.5;
+            let e = expected(rating[i], rating[j]);
+            grad[i] += si - games_ij * e;
+            grad[j] -= si - games_ij * e;
+            info[i] += games_ij * e * (1.0 - e);
+            info[j] += games_ij * e * (1.0 - e);
+        }
+        let mut moved = 0.0f64;
+        for i in 0..n {
+            if anchor[i].is_none() && info[i] > 0.0 {
+                let step = (k * grad[i] / info[i]).clamp(-100.0, 100.0) * 0.5;
+                rating[i] += step;
+                moved = moved.max(step.abs());
+            }
+        }
+        if moved < 0.01 {
+            break;
+        }
+    }
+    for (&(i, j), c) in &pairs {
+        games[i] += c[0] + c[1] + c[2];
+        games[j] += c[0] + c[1] + c[2];
+    }
+    (0..n)
+        .filter(|&i| anchor[i].is_none() && games[i] > 0.0)
+        .map(|i| Rated {
+            name: names[i].clone(),
+            rating: rating[i],
+            err: if info[i] > 0.0 { 1.96 * k / info[i].sqrt() } else { 999.0 },
+            games: games[i],
+            first_seen: first_seen[i],
+            live: live[i],
+        })
+        .collect()
+}
+
 /// Rates every run in creation order. Opponents are rated either by a fixed anchor from meta.txt
 /// (e.g. Elo-limited Stockfish) or by a rating an earlier run established for that engine, so
 /// version-vs-version tests also move the rating.
@@ -1123,6 +1243,27 @@ impl App {
             let ids = self.refresh_all();
             let runs = self.runs.lock().unwrap();
             let items: Vec<String> = ids.iter().map(|id| run_brief(id, &runs[id])).collect();
+            return ("200 OK", format!("[{}]", items.join(",")), "application/json");
+        }
+        if path == "/api/ratings" {
+            self.refresh_all();
+            let runs = self.runs.lock().unwrap();
+            let mut list = global_ratings(&runs);
+            list.sort_by_key(|r| r.first_seen);
+            let items: Vec<String> = list
+                .iter()
+                .map(|r| {
+                    format!(
+                        "{{\"name\":{},\"rating\":{},\"err\":{},\"games\":{},\"first_seen\":{},\"live\":{}}}",
+                        js(&r.name),
+                        num(r.rating),
+                        num(r.err),
+                        r.games,
+                        r.first_seen,
+                        r.live
+                    )
+                })
+                .collect();
             return ("200 OK", format!("[{}]", items.join(",")), "application/json");
         }
         if path == "/api/health" {
