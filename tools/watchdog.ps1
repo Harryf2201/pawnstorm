@@ -77,7 +77,12 @@ function Num($s) {
     [double]::Parse($m.Value.Replace(',', '.'), [Globalization.CultureInfo]::InvariantCulture)
 }
 
+$script:Fans = @()
+$SeenSpinning = [Collections.Generic.HashSet[string]]::new()
+$fanStopTicks = 0
+
 function Read-Sensors {
+    $script:Fans = @()
     $r = [ordered]@{}
     $ids = @{}
     try {
@@ -86,6 +91,7 @@ function Read-Sensors {
         while ($stack.Count) {
             $n = $stack.Pop()
             if ($n.SensorId) { $ids[$n.SensorId] = $n.Value }
+            if ($n.Type -eq 'Fan' -and $n.SensorId) { $script:Fans += @{ id = $n.SensorId; name = $n.Text; rpm = (Num $n.Value) } }
             foreach ($c in $n.Children) { $stack.Push($c) }
         }
     } catch {}
@@ -192,6 +198,21 @@ while ($true) {
         if ($isCrit) { $worst = 'critical'; $why += "$($Labels[$k]) $v$($Units[$k])" }
         elseif ($isWarn) { if ($worst -ne 'critical') { $worst = 'warn' }; $why += "$($Labels[$k]) $v$($Units[$k])" }
     }
+    # Fan failure: a fan we've seen spinning that now reads ~0 RPM. Headers that never spin are
+    # ignored (unconnected), and the GPU fan only counts when the GPU is hot (it stops when idle).
+    $stopped = @()
+    foreach ($f in $script:Fans) {
+        if ($null -eq $f.rpm) { continue }
+        if ($f.rpm -gt 300) { [void]$SeenSpinning.Add($f.id) }
+        $isGpu = $f.id -like '*gpu*'
+        if ($SeenSpinning.Contains($f.id) -and $f.rpm -lt 100 -and (-not $isGpu -or $s.gpu_temp -ge 70)) { $stopped += $f.name }
+    }
+    $fanStopTicks = if ($stopped) { $fanStopTicks + 1 } else { 0 }
+    if ($fanStopTicks -ge 3) {
+        $worst = 'critical'; $allOk = $false
+        $why += "fan stopped: $($stopped -join ', ')"
+    } elseif ($stopped) { $allOk = $false }
+
     # No CPU temperature at all is treated as a warning: we can't see what's happening.
     if ($null -eq $s.cpu_temp) { $missingTicks++ } else { $missingTicks = 0 }
     if ($missingTicks -ge 12) {
@@ -241,6 +262,8 @@ while ($true) {
     $groups = ($Suspended.Values | Sort-Object -Unique) -join ','
     $lines = @("updated=$now", "level=$level", "control=$control", "reason=$reason", "warn_now=$($why -join ', ')", "paused_groups=$groups", "paused_processes=$($Suspended.Count)", "pause_count=$pauseCount")
     foreach ($k in $s.Keys) { $lines += "$k=$($s[$k])" }
+    # Spinning fans as "name:rpm" pairs (headers that have never spun are left out).
+    $lines += "fans=$(($script:Fans | Where-Object { $SeenSpinning.Contains($_.id) } | ForEach-Object { "$($_.name):$([int]$_.rpm)" }) -join '|')"
     foreach ($k in $Limits.Keys) { $lines += "limit_${k}=$($Limits[$k].warn),$($Limits[$k].crit)" }
     [IO.File]::WriteAllLines("$StatusFile.tmp", [string[]]$lines)
     Move-Item -Force "$StatusFile.tmp" $StatusFile

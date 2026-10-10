@@ -250,6 +250,28 @@ struct RunState {
     rating: Option<(f64, f64, bool)>,
 }
 
+/// "LLR: -0.00 (-0.1%) (-2.94, 2.94) [0.00, 5.00]" -> [llr, lower bound, upper bound, elo0, elo1].
+/// The "(-0.1%)" progress figure is skipped, so it can't be mistaken for the lower bound.
+fn parse_llr(line: &str) -> Option<Vec<f64>> {
+    let mut rest = line.trim().strip_prefix("LLR:")?.to_string();
+    // Remove every "( ... % )" group.
+    let mut from = 0;
+    while let Some(a) = rest[from..].find('(').map(|i| i + from) {
+        let Some(b) = rest[a..].find(')') else { break };
+        if rest[a..a + b].contains('%') {
+            rest.replace_range(a..a + b + 1, " ");
+            from = a;
+        } else {
+            from = a + b + 1;
+        }
+    }
+    let nums: Vec<f64> = rest
+        .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    (nums.len() >= 3 && nums[1] < nums[2]).then_some(nums)
+}
+
 fn after<'a>(tokens: &[&'a str], key: &str) -> Option<&'a str> {
     tokens.iter().position(|&t| t == key).and_then(|i| tokens.get(i + 1)).copied()
 }
@@ -268,14 +290,8 @@ impl RunState {
         }
         for line in self.out_tail.read_new(&dir.join("output.txt")) {
             let l = line.trim();
-            if l.starts_with("LLR:") {
-                let nums: Vec<f64> = l
-                    .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
-                    .filter_map(|s| s.parse().ok())
-                    .collect();
-                if nums.len() >= 3 {
-                    self.llr = Some(nums);
-                }
+            if let Some(nums) = parse_llr(l) {
+                self.llr = Some(nums);
             }
             if l.contains("was accepted") {
                 self.verdict = l.to_string();
@@ -475,6 +491,67 @@ fn engine_key(name: &str) -> String {
     out
 }
 
+/// One section of versions.ini: a named engine version and every engine name it has used.
+#[derive(Default, Clone)]
+struct Version {
+    name: String,
+    engines: Vec<String>,
+    status: String,
+    date: String,
+    parent: String,
+    branch: String,
+    network: String,
+    data: String,
+    summary: String,
+}
+
+/// `[section]` + `key = value` lines; `;` and `#` start comments. Sections keep file order.
+fn parse_versions(text: &str) -> Vec<Version> {
+    let mut out: Vec<Version> = Vec::new();
+    for line in text.lines() {
+        let l = line.trim_start_matches('\u{feff}').trim();
+        if l.is_empty() || l.starts_with(';') || l.starts_with('#') {
+            continue;
+        }
+        if let Some(name) = l.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+            out.push(Version { name: name.trim().to_string(), ..Default::default() });
+            continue;
+        }
+        let (Some(v), Some((k, val))) = (out.last_mut(), l.split_once('=')) else { continue };
+        let val = val.trim().to_string();
+        match k.trim().to_lowercase().as_str() {
+            "engines" => v.engines = val.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            "status" => v.status = val,
+            "date" => v.date = val,
+            "parent" => v.parent = val,
+            "branch" => v.branch = val,
+            "network" => v.network = val,
+            "data" => v.data = val,
+            "summary" => v.summary = val,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// engine_key(any engine name of a version, or the version's own name) -> version name.
+fn alias_map(versions: &[Version]) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    for v in versions {
+        m.insert(engine_key(&v.name), v.name.clone());
+        for e in &v.engines {
+            m.insert(engine_key(e), v.name.clone());
+        }
+    }
+    m
+}
+
+/// Identity of an engine for rating purposes: all names of one catalogued version are one player.
+fn canon_key(alias: &HashMap<String, String>, n: &str) -> String {
+    let k = engine_key(n);
+    alias.get(&k).map_or(k, |v| format!("@{v}"))
+}
+
 struct Rated {
     name: String,
     rating: f64,
@@ -489,16 +566,16 @@ struct Rated {
 /// One joint maximum-likelihood fit over every game in every run. Anchor engines (Elo-limited
 /// Stockfish) keep their fixed ratings; everyone else is solved together, so new games against a
 /// version refine its rating retroactively and version-vs-version games count for both sides.
-fn global_ratings(runs: &HashMap<String, RunState>) -> Vec<Rated> {
+fn global_ratings(runs: &HashMap<String, RunState>, alias: &HashMap<String, String>) -> Vec<Rated> {
     let mut idx: HashMap<String, usize> = HashMap::new();
     let mut names: Vec<String> = Vec::new();
     let mut anchor: Vec<Option<f64>> = Vec::new();
     let mut first_seen: Vec<u64> = Vec::new();
     let mut live: Vec<bool> = Vec::new();
     let id_of = |n: &str, t: u64, running: bool, idx: &mut HashMap<String, usize>, names: &mut Vec<String>, anchor: &mut Vec<Option<f64>>, first_seen: &mut Vec<u64>, live: &mut Vec<bool>| {
-        let k = engine_key(n);
-        let i = *idx.entry(k).or_insert_with(|| {
-            names.push(n.to_string());
+        let i = *idx.entry(canon_key(alias, n)).or_insert_with(|| {
+            // Catalogued engines are shown by their version name.
+            names.push(alias.get(&engine_key(n)).cloned().unwrap_or_else(|| n.to_string()));
             anchor.push(None);
             first_seen.push(t);
             live.push(false);
@@ -513,7 +590,7 @@ fn global_ratings(runs: &HashMap<String, RunState>) -> Vec<Rated> {
     for r in runs.values() {
         let running = status(r) == "running";
         // Only the engine under test counts as live, not the opponents it is playing.
-        let main_key = engine_key(&r.meta.main);
+        let main_key = canon_key(alias, &r.meta.main);
         let t = r.meta.created;
         for (n, a) in &r.meta.anchors {
             let i = id_of(n, t, false, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
@@ -526,8 +603,8 @@ fn global_ratings(runs: &HashMap<String, RunState>) -> Vec<Rated> {
                 "1/2-1/2" => 0.5,
                 _ => continue,
             };
-            let w = id_of(&g.white, t, running && engine_key(&g.white) == main_key, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
-            let b = id_of(&g.black, t, running && engine_key(&g.black) == main_key, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
+            let w = id_of(&g.white, t, running && canon_key(alias, &g.white) == main_key, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
+            let b = id_of(&g.black, t, running && canon_key(alias, &g.black) == main_key, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
             if w == b {
                 continue;
             }
@@ -591,7 +668,7 @@ fn global_ratings(runs: &HashMap<String, RunState>) -> Vec<Rated> {
 /// Rates every run in creation order. Opponents are rated either by a fixed anchor from meta.txt
 /// (e.g. Elo-limited Stockfish) or by a rating an earlier run established for that engine, so
 /// version-vs-version tests also move the rating.
-fn compute_ratings(runs: &mut HashMap<String, RunState>, ids_by_age: &[String]) {
+fn compute_ratings(runs: &mut HashMap<String, RunState>, ids_by_age: &[String], alias: &HashMap<String, String>) {
     let mut known: HashMap<String, (f64, f64)> = HashMap::new();
     for id in ids_by_age {
         let r = runs.get_mut(id).unwrap();
@@ -604,7 +681,7 @@ fn compute_ratings(runs: &mut HashMap<String, RunState>, ids_by_age: &[String]) 
             let n = c[0] + c[1] + c[2];
             if let Some((_, a)) = r.meta.anchors.iter().find(|(name, _)| name == opp) {
                 rated.push((*a, *c));
-            } else if let Some(&(a, e)) = known.get(opp) {
+            } else if let Some(&(a, e)) = known.get(&canon_key(alias, opp)) {
                 rated.push((a, *c));
                 anchor_err2 += e * e * n;
                 derived = true;
@@ -620,7 +697,7 @@ fn compute_ratings(runs: &mut HashMap<String, RunState>, ids_by_age: &[String]) 
         });
         if let Some((v, e, _)) = r.rating {
             if !r.meta.main.is_empty() && r.finished {
-                known.insert(r.meta.main.clone(), (v, e));
+                known.insert(canon_key(alias, &r.meta.main), (v, e));
             }
         }
     }
@@ -866,9 +943,42 @@ struct App {
     runs: Mutex<HashMap<String, RunState>>,
     /// lab-start / lab-stop script launched from the dashboard, while it runs.
     lab_child: Mutex<Option<(String, std::process::Child)>>,
+    /// Where versions.ini may live (repo root next to the exe, or the working directory); first existing wins.
+    version_files: Vec<PathBuf>,
 }
 
 impl App {
+    /// The version catalog, re-read on every call so edits show up immediately.
+    fn versions(&self) -> Vec<Version> {
+        self.version_files
+            .iter()
+            .find_map(|p| std::fs::read_to_string(p).ok())
+            .map(|t| parse_versions(&t))
+            .unwrap_or_default()
+    }
+
+    fn versions_json(&self) -> String {
+        let items: Vec<String> = self
+            .versions()
+            .iter()
+            .map(|v| {
+                format!(
+                    "{{\"name\":{},\"engines\":[{}],\"status\":{},\"date\":{},\"parent\":{},\"branch\":{},\"network\":{},\"data\":{},\"summary\":{}}}",
+                    js(&v.name),
+                    v.engines.iter().map(|e| js(e)).collect::<Vec<_>>().join(","),
+                    js(&v.status),
+                    js(&v.date),
+                    js(&v.parent),
+                    js(&v.branch),
+                    js(&v.network),
+                    js(&v.data),
+                    js(&v.summary)
+                )
+            })
+            .collect();
+        format!("[{}]", items.join(","))
+    }
+
     fn refresh_all(&self) -> Vec<String> {
         let dir = self.root.join("runs");
         let mut ids: Vec<String> = std::fs::read_dir(&dir)
@@ -885,7 +995,7 @@ impl App {
             runs.entry(id.clone()).or_default().refresh(&dir.join(id));
         }
         ids.sort_by_key(|id| runs[id].meta.created);
-        compute_ratings(&mut runs, &ids);
+        compute_ratings(&mut runs, &ids, &alias_map(&self.versions()));
         ids.reverse();
         ids
     }
@@ -1361,7 +1471,7 @@ impl App {
         if path == "/api/ratings" {
             self.refresh_all();
             let runs = self.runs.lock().unwrap();
-            let mut list = global_ratings(&runs);
+            let mut list = global_ratings(&runs, &alias_map(&self.versions()));
             list.sort_by_key(|r| r.first_seen);
             let items: Vec<String> = list
                 .iter()
@@ -1394,6 +1504,9 @@ impl App {
                 })
                 .collect();
             return ("200 OK", format!("[{}]", items.join(",")), "application/json");
+        }
+        if path == "/api/versions" {
+            return ("200 OK", self.versions_json(), "application/json");
         }
         if path == "/api/health" {
             return ("200 OK", self.health(), "application/json");
@@ -1475,11 +1588,47 @@ fn main() {
     });
     let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8000);
     let _ = std::fs::create_dir_all(root.join("runs"));
-    let app = Arc::new(App { root, runs: Mutex::new(HashMap::new()), lab_child: Mutex::new(None) });
+    // The catalog sits at the repo root; the exe lives in <repo>/target/release/.
+    let mut version_files: Vec<PathBuf> = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.ancestors().nth(3).map(|p| p.join("versions.ini")))
+        .into_iter()
+        .collect();
+    version_files.push(PathBuf::from("versions.ini"));
+    let app = Arc::new(App { root, runs: Mutex::new(HashMap::new()), lab_child: Mutex::new(None), version_files });
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("cannot bind port");
     println!("Pawnstorm Lab running at http://localhost:{port}");
     for stream in listener.incoming().flatten() {
         let app = app.clone();
         std::thread::spawn(move || serve(&app, stream));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn llr_line_from_fastchess() {
+        let v = parse_llr("LLR: -0.00 (-0.1%) (-2.94, 2.94) [0.00, 5.00]").unwrap();
+        assert_eq!(v, vec![-0.0, -2.94, 2.94, 0.0, 5.0]);
+        let v = parse_llr("LLR: 1.20 (40.8%) (-2.94, 2.94) [0.00, 5.00]").unwrap();
+        assert_eq!((v[0], v[1], v[2]), (1.2, -2.94, 2.94));
+        // Older format without the percentage.
+        let v = parse_llr("LLR: 0.50 (-2.94, 2.94) [0.00, 5.00]").unwrap();
+        assert_eq!((v[0], v[1], v[2]), (0.5, -2.94, 2.94));
+        assert!(parse_llr("Finished match").is_none());
+    }
+
+    #[test]
+    fn catalog_merges_engine_names() {
+        let vs = parse_versions("; c\n\u{feff}[v0.1]\nengines = Pawnstorm-0.1, pawnstorm-v0.1\nstatus = main\n\n[v0.9b]\nengines = pawnstorm-v0.9b-512x8\nsummary = x = y\n");
+        assert_eq!(vs.len(), 2);
+        assert_eq!(vs[0].engines.len(), 2);
+        assert_eq!(vs[1].summary, "x = y");
+        let a = alias_map(&vs);
+        assert_eq!(canon_key(&a, "Pawnstorm-0.1"), canon_key(&a, "pawnstorm-v0.1"));
+        assert_eq!(canon_key(&a, "pawnstorm-v0.9b-512x8"), "@v0.9b");
+        assert_eq!(canon_key(&a, "SF-2900"), "sf2900");
     }
 }

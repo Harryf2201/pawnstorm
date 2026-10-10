@@ -136,6 +136,13 @@
   .score.good b { color: var(--good); } .score.bad b { color: var(--bad); }
   .vach { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   .vmore { color: var(--accent); font-size: 12px; margin-top: 10px; cursor: pointer; user-select: none; }
+  .vsum { margin-top: 10px; }
+  .vmeta { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 14px; margin: 10px 0 0; font-size: 13px; }
+  .vmeta dt { color: var(--muted); } .vmeta dd { margin: 0; overflow-wrap: anywhere; }
+  code { font: 12px Consolas, monospace; background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
+  .vcard.planned { border-style: dashed; background: transparent; }
+  .vcard.planned .vtitle { color: var(--muted); }
+  .chip.plan { border-style: dashed; }
 
   /* Tables */
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
@@ -300,26 +307,39 @@ function trackRate(g) {
   if (!prev || t > prev.t) genRate[g.name] = { t, positions: g.positions, rate: g.rate };
 }
 
-// Engine names: "Pawnstorm-0.1" and "pawnstorm-v0.1" are the same version.
-const canon = n => String(n).replace(/^pawnstorm[-_ ]?v?(\d)/i, 'pawnstorm-v$1');
-const short = n => canon(n).replace(/^pawnstorm-/i, '');
-const vkey = n => String(n).toLowerCase().replace(/[^a-z0-9.]/g, '').replace(/(\D)v(\d)/, '$1$2');
-const KNOWN = { '0.1': 'Hand-written evaluation (no neural network)', '0.2': 'First neural network' };
-function describe(p) {
-  const s = short(p.raw), bits = [];
-  const v = (s.match(/^v(\d+\.\d+)/) || [])[1];
-  if (v && KNOWN[v]) bits.push(KNOWN[v]);
-  const m = s.match(/(\d+)m\b/i); if (m) bits.push(`trained on ${m[1]}M positions`);
-  const x = s.match(/(\d{3,4})x(\d+)/); if (x) bits.push(`${x[1]}-neuron net, ${x[2]} output buckets`);
-  if (/long/i.test(s)) bits.push('longer training');
-  return bits.join(' · ') || 'Engine version';
+// Engine names -> friendly version names, from versions.ini (served by /api/versions).
+// "Pawnstorm-0.1", "pawnstorm-v0.1" and every other name listed for a version are the same engine.
+let catalog = [], aliasMap = {}, aliasRe = null;
+const ekey = n => {
+  const s = String(n).toLowerCase().replace(/[^a-z0-9.]/g, '');
+  let o = '';
+  for (let i = 0; i < s.length; i++) if (!(s[i] === 'v' && i > 0 && !/\d/.test(s[i - 1]) && /\d/.test(s[i + 1] || ''))) o += s[i];
+  return o;
+};
+function setCatalog(c) {
+  catalog = c; aliasMap = {};
+  const raw = [];
+  c.forEach(v => { aliasMap[ekey(v.name)] = v.name; v.engines.forEach(e => { aliasMap[ekey(e)] = v.name; raw.push([e, v.name]); }); });
+  raw.sort((a, b) => b[0].length - a[0].length);
+  aliasRe = raw.length ? new RegExp(raw.map(r => r[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi') : null;
+  if (aliasRe) aliasRe._map = Object.fromEntries(raw.map(r => [r[0].toLowerCase(), r[1]]));
 }
+const canon = n => String(n).replace(/^pawnstorm[-_ ]?v?(\d)/i, 'pawnstorm-v$1');
+/// Friendly name for one engine name; names not in the catalog just lose the "pawnstorm-" prefix.
+const short = n => aliasMap[ekey(n)] || canon(n).replace(/^pawnstorm-/i, '');
+/// The same for engine names buried in free text (tournament titles, achievement descriptions).
+const friendlyText = s => {
+  let t = String(s ?? '');
+  if (aliasRe) t = t.replace(aliasRe, m => aliasRe._map[m.toLowerCase()] || m);
+  return t.replace(/\bpawnstorm[-_ ]?v?(\d)/gi, 'v$1');
+};
+const isOurs = n => !!aliasMap[ekey(n)] || /^pawnstorm/i.test(n);
 
 /// Everything about the engine versions, derived from the server's joint rating fit.
 function versionModel() {
-  const pts = ratings.filter(r => /^pawnstorm/i.test(r.name)).map(r => ({
-    key: vkey(r.name), raw: r.name, name: canon(r.name), short: short(r.name), perf: r.rating, err: r.err,
-    games: r.games, first: r.first_seen, live: r.live, vs: (r.vs || []).map(o => ({ ...o, name: canon(o.name), n: o.w + o.d + o.l })),
+  const pts = ratings.filter(r => isOurs(r.name)).map(r => ({
+    key: short(r.name), name: short(r.name), short: short(r.name), perf: r.rating, err: r.err,
+    games: r.games, first: r.first_seen, live: r.live, vs: (r.vs || []).map(o => ({ ...o, name: short(o.name), n: o.w + o.d + o.l })),
   })).sort((a, b) => a.first - b.first);
   // Headline = strongest version. Versions with too few games (huge error margin) don't qualify,
   // so a lucky early result from an experiment can't replace it.
@@ -355,25 +375,20 @@ function levelText(p) {
   return bits.join(' · ') || 'Not enough games against Stockfish yet';
 }
 
-const VERDICT = {
-  first: ['', 'First version'],
-  better: ['good', '↑ Improved'],
-  same: ['', '≈ About the same'],
-  worse: ['warn', '↓ Weaker (experiment)'],
+/// Status words from versions.ini -> [chip style, label].
+const STATUS = {
+  main: ['', 'Main line'],
+  best: ['best', '★ Best'],
+  testing: ['info', 'Testing'],
+  passed: ['good', '✓ Passed'],
+  failed: ['bad', '✗ Failed'],
+  planned: ['plan', 'Planned'],
 };
-function chips(p) {
-  let h = '';
-  if (p.strongest) h += `<span class="chip best">★ Strongest</span>`;
-  const [c, t] = VERDICT[p.verdict];
-  if (!(p.strongest && p.verdict === 'first')) h += `<span class="chip ${c}">${t}</span>`;
-  if (p.live) h += `<span class="chip info"><span class="dot running"></span>Being tested now</span>`;
-  else if (p.provisional) h += `<span class="chip">Few games so far</span>`;
-  return h;
-}
+const statusChip = s => { const [c, t] = STATUS[s] || ['', s || 'Unlisted']; return `<span class="chip ${c}">${esc(t)}</span>`; };
 
 function achByVersion() {
   const m = {};
-  (ach?.items || []).filter(a => a.unlocked && a.main).forEach(a => (m[vkey(a.main)] ||= []).push(a));
+  (ach?.items || []).filter(a => a.unlocked && a.main).forEach(a => (m[short(a.main)] ||= []).push(a));
   return m;
 }
 
@@ -513,7 +528,7 @@ function nowRows() {
     const eta = d && r.games > 0 && r.total && !d.llr && r.type !== 'sprt' ? dur(d.elapsed / r.games * (r.total - r.games)) : null;
     const sc = s && n ? ` · ${esc(short(r.main))} is scoring ${(100 * s.score).toFixed(0)}% so far` : '';
     rows.push({
-      state: 'running', icon: '⚔️', t: r.name,
+      state: 'running', icon: '⚔️', t: friendlyText(r.name),
       d: `${r.type === 'sprt' ? 'Improvement test' : 'Tournament'} · game ${r.games}${r.type === 'sprt' ? ' (stops as soon as the result is clear)' : r.total ? ' of ' + r.total : ''}${eta ? ' · about ' + eta + ' left' : ''}${sc}`,
       pct: r.total && r.type !== 'sprt' ? 100 * r.games / r.total : null, go: 'tournaments',
     });
@@ -573,7 +588,7 @@ function renderNow() {
 }
 
 const achRow = (a, mini) => `<div class="ach ${a.unlocked ? a.tier : 'locked'} ${mini ? 'mini' : ''}"><div class="ic">${a.icon}</div>
-  <div class="body"><div class="t">${esc(a.title)}</div><div class="d">${esc(a.desc)}</div></div>
+  <div class="body"><div class="t">${esc(friendlyText(a.title))}</div><div class="d">${esc(friendlyText(a.desc))}</div></div>
   <div class="w">${a.unlocked ? `<span class="pos">✓ ${when(a.date)}</span>${a.main ? `<span class="wmain">${esc(short(a.main))}</span>` : ''}` : '🔒 not yet'}</div></div>`;
 
 function renderGoals() {
@@ -594,70 +609,90 @@ function renderOverview(m) {
   return renderHero(m) + renderNow() + renderGoals();
 }
 
-// ---- Versions ----
+// ---- Versions: the catalog in versions.ini, plus live ratings from every game played ----
 function renderVersions(m) {
-  if (!m.pts.length) return `<h2>Versions</h2><div class="empty">No versions have been rated yet.</div>`;
   const byAch = achByVersion();
-  const list = m.pts.slice();
-  if (ui.sort === 'new') list.reverse(); else list.sort((a, b) => b.perf - a.perf);
-  const lo = Math.floor((Math.min(...m.pts.map(p => p.perf - p.err)) - 25) / 100) * 100;
-  const hi = Math.ceil((Math.max(...m.pts.map(p => p.perf + p.err)) + 25) / 100) * 100;
+  const rated = Object.fromEntries(m.pts.map(p => [p.key, p]));
+  const inFile = new Set(catalog.map(c => c.name));
+  // File order, then rated engines the file doesn't know about; planned versions always come last.
+  const entries = catalog.map(c => ({ c, p: rated[c.name] || null }))
+    .concat(m.pts.filter(p => !inFile.has(p.key)).map(p => ({ c: null, p })));
+  const planned = e => e.c && e.c.status === 'planned';
+  let list = entries.filter(e => !planned(e));
+  if (ui.sort === 'rating') list.sort((a, b) => (b.p ? b.p.perf : -1) - (a.p ? a.p.perf : -1));
+  list = list.concat(entries.filter(planned));
+  if (!list.length) return `<h2>Versions</h2><div class="empty">No versions yet. Add them to versions.ini in the repository.</div>`;
+
+  const lo = m.pts.length ? Math.floor((Math.min(...m.pts.map(p => p.perf - p.err)) - 25) / 100) * 100 : 0;
+  const hi = m.pts.length ? Math.ceil((Math.max(...m.pts.map(p => p.perf + p.err)) + 25) / 100) * 100 : 1;
   const X = v => Math.max(0, Math.min(100, 100 * (v - lo) / (hi - lo)));
-  const tests = key => runs.filter(r => vkey(r.main) === key);
-  const card = p => {
-    const open = isOpen('ver:' + p.key);
-    const mine = byAch[p.key] || [];
-    const sf = p.vs.filter(o => o.n >= 6).sort((a, b) => (b.anchor ?? -1) - (a.anchor ?? -1) || a.name.localeCompare(b.name));
-    const scoreChip = o => { const s = pct(o.w, o.d, o.n); return `<span class="score ${s >= 55 ? 'good' : s <= 45 ? 'bad' : ''}">${esc(o.name.replace(/^pawnstorm-/i, ''))} <b>${s.toFixed(0)}%</b></span>`; };
-    const vcls = p.strongest ? 'best' : p.verdict === 'worse' ? 'worse' : p.verdict === 'same' ? 'same' : '';
-    const rated = o => o.anchor != null ? o.anchor.toFixed(0) : (() => { const q = m.pts.find(x => x.key === vkey(o.name)); return q ? q.perf.toFixed(0) : '–'; })();
-    let h = `<div class="vcard ${p.strongest ? 'is-best' : ''} ${p.verdict === 'worse' ? 'is-worse' : ''}">
-      <div class="vtop" data-toggle="ver:${esc(p.key)}">
-        <div style="min-width:0"><div class="vtitle">${esc(p.short)}</div><div class="vchips">${chips(p)}</div></div>
-        <div class="vrate"><b>${p.perf.toFixed(0)}</b><small>±${p.err.toFixed(0)} Elo</small></div>
+  const sub = t => `<h4 class="sub" style="font-size:12px;margin:16px 0 8px;text-transform:uppercase;letter-spacing:.6px">${t}</h4>`;
+
+  const card = ({ c, p }) => {
+    const name = c ? c.name : p.key;
+    const status = c ? c.status : '';
+    const open = p && isOpen('ver:' + name);
+    const mine = byAch[name] || [];
+    const parentP = c && c.parent ? rated[c.parent] : null;
+    const change = p && parentP ? p.perf - parentP.perf : null;
+    const vs = p ? p.vs.filter(o => o.n >= 6).sort((a, b) => (b.anchor ?? -1) - (a.anchor ?? -1) || a.name.localeCompare(b.name)) : [];
+    const scoreChip = o => { const s = pct(o.w, o.d, o.n); return `<span class="score ${s >= 55 ? 'good' : s <= 45 ? 'bad' : ''}">${esc(o.name)} <b>${s.toFixed(0)}%</b></span>`; };
+    const ratingOf = o => o.anchor != null ? o.anchor.toFixed(0) : rated[o.name] ? rated[o.name].perf.toFixed(0) : '–';
+    const barCls = status === 'failed' ? 'worse' : status === 'testing' ? 'same' : p && p.strongest ? 'best' : '';
+    const row = (k, v) => v ? `<dt>${k}</dt><dd>${v}</dd>` : '';
+    const parentTxt = c && c.parent ? esc(c.parent) + (parentP ? ` <span class="sub">(${parentP.perf.toFixed(0)})</span>` : '') : '';
+    let h = `<div class="vcard ${status === 'planned' ? 'planned' : ''} ${p && p.strongest ? 'is-best' : ''} ${status === 'failed' ? 'is-worse' : ''}">
+      <div class="vtop" ${p ? `data-toggle="ver:${esc(name)}"` : ''}>
+        <div style="min-width:0"><div class="vtitle">${esc(name)}</div>
+          <div class="vchips">${c ? statusChip(status) : '<span class="chip">Not in versions.ini</span>'}
+            ${p && p.live ? '<span class="chip info"><span class="dot running"></span>Games being played</span>' : p && p.provisional ? '<span class="chip">Few games so far</span>' : ''}
+            ${p && p.strongest ? '<span class="chip best">★ Highest measured rating</span>' : ''}</div></div>
+        <div class="vrate">${p ? `<b>${p.perf.toFixed(0)}</b><small>±${p.err.toFixed(0)} Elo · ${p.games} games</small>` : `<b class="sub">–</b><small>${status === 'planned' ? 'not built yet' : 'not rated yet'}</small>`}</div>
       </div>
-      <div class="vdesc sub">${esc(describe(p))}</div>
-      <div class="level">${levelText(p)}</div>
-      <div class="scale ${vcls}"><div class="fill" style="width:${X(p.perf)}%"></div><div class="err" style="left:${X(p.perf - p.err)}%;width:${X(p.perf + p.err) - X(p.perf - p.err)}%"></div></div>
+      ${c && c.summary ? `<div class="vsum">${esc(c.summary)}</div>` : c ? '' : `<div class="vsum sub">This engine has been rated but is not described in versions.ini yet. Add a section with <code>engines = ${esc(name)}</code>.</div>`}
+      ${c ? `<dl class="vmeta">${row('Network', esc(c.network))}${row('Data', esc(c.data))}${row('Based on', parentTxt)}${row('Branch', c.branch ? `<code>${esc(c.branch)}</code>` : '')}${row('Date', esc(c.date))}</dl>` : ''}`;
+    if (p) {
+      h += `<div class="level">${levelText(p)}</div>
+      <div class="scale ${barCls}"><div class="fill" style="width:${X(p.perf)}%"></div><div class="err" style="left:${X(p.perf - p.err)}%;width:${X(p.perf + p.err) - X(p.perf - p.err)}%"></div></div>
       <div class="scale-l"><span>${lo}</span><span>${hi}</span></div>
       <div class="vstats">
-        ${p.gain != null ? `<span><b class="${cls(p.gain)}">${sign(p.gain)}</b> vs best before (${esc(p.prev.short)})</span>` : ''}
+        ${change != null ? `<span><b class="${cls(change)}">${sign(change)}</b> Elo vs ${esc(c.parent)}</span>` : ''}
         <span><b>${p.games}</b> games</span>
         <span>first rated ${p.first ? when(p.first) : '–'}</span>
-      </div>
-      ${mine.length ? `<div class="vach">${mine.slice(0, open ? 99 : 6).map(a => `<span class="chip best" title="${esc(a.desc)}">${a.icon} ${esc(a.title)}</span>`).join('')}${!open && mine.length > 6 ? `<span class="chip">+${mine.length - 6} more</span>` : ''}</div>` : ''}
-      <div class="vmore" data-toggle="ver:${esc(p.key)}">${open ? '▾ Hide results' : '▸ Show results against every opponent'}</div>`;
+      </div>`;
+    }
+    if (mine.length) h += `<div class="vach">${mine.slice(0, open ? 99 : 6).map(a => `<span class="chip best" title="${esc(friendlyText(a.desc))}">${a.icon} ${esc(friendlyText(a.title))}</span>`).join('')}${!open && mine.length > 6 ? `<span class="chip">+${mine.length - 6} more</span>` : ''}</div>`;
+    if (p) h += `<div class="vmore" data-toggle="ver:${esc(name)}">${open ? '▾ Hide results' : '▸ Show results against every opponent'}</div>`;
     if (open) {
-      h += `<h4 class="sub" style="font-size:12px;margin:16px 0 8px;text-transform:uppercase;letter-spacing:.6px">Results, all tests combined</h4>
-        <div class="tbl"><table><tr><th>Opponent</th><th class="r">Won</th><th class="r">Drew</th><th class="r">Lost</th><th class="r">Score</th></tr>
-        ${sf.map(o => `<tr><td>${esc(o.name.replace(/^pawnstorm-/i, ''))}<div class="sub" style="font-size:11px">rated ${rated(o)} · ${o.n} games</div></td><td class="r">${o.w}</td><td class="r">${o.d}</td><td class="r">${o.l}</td><td class="r"><b>${pct(o.w, o.d, o.n).toFixed(0)}%</b></td></tr>`).join('') || '<tr><td colspan="5" class="sub">No games yet.</td></tr>'}
+      h += sub('Results, all tests combined') + `<div class="tbl"><table><tr><th>Opponent</th><th class="r">Won</th><th class="r">Drew</th><th class="r">Lost</th><th class="r">Score</th></tr>
+        ${vs.map(o => `<tr><td>${esc(o.name)}<div class="sub" style="font-size:11px">rated ${ratingOf(o)} · ${o.n} games</div></td><td class="r">${o.w}</td><td class="r">${o.d}</td><td class="r">${o.l}</td><td class="r"><b>${pct(o.w, o.d, o.n).toFixed(0)}%</b></td></tr>`).join('') || '<tr><td colspan="5" class="sub">No games yet.</td></tr>'}
         </table></div>`;
-      const ts = tests(p.key);
-      if (ts.length) h += `<h4 class="sub" style="font-size:12px;margin:16px 0 8px;text-transform:uppercase;letter-spacing:.6px">Tournaments for this version</h4>` +
-        ts.map(r => `<div class="now-row" data-go="tournaments" data-run="${esc(r.id)}"><div class="now-main"><div class="now-t">${esc(r.name)}</div><div class="now-d">${r.games}${r.total ? ' / ' + r.total : ''} games · ${r.status === 'running' ? 'running' : r.created ? when(r.created) : ''}${r.perf != null ? ' · measured ' + r.perf.toFixed(0) : ''}</div></div><span class="sub">›</span></div>`).join('');
+      const ts = runs.filter(r => short(r.main) === name);
+      if (ts.length) h += sub('Tournaments for this version') +
+        ts.map(r => `<div class="now-row" data-go="tournaments" data-run="${esc(r.id)}"><div class="now-main"><div class="now-t">${esc(friendlyText(r.name))}</div><div class="now-d">${r.games}${r.total ? ' / ' + r.total : ''} games · ${r.status === 'running' ? 'running' : r.created ? when(r.created) : ''}${r.perf != null ? ' · measured ' + r.perf.toFixed(0) : ''}</div></div><span class="sub">›</span></div>`).join('');
       if (!mine.length) h += `<div class="sub" style="margin-top:12px">No achievements earned with this version yet.</div>`;
-    } else if (sf.length) {
-      h += `<div class="vach" style="margin-top:8px">${sf.slice(0, 5).map(scoreChip).join('')}</div>`;
+    } else if (vs.length) {
+      h += `<div class="vach" style="margin-top:8px">${vs.slice(0, 5).map(scoreChip).join('')}</div>`;
     }
     return h + '</div>';
   };
   return `<h2>Engine versions</h2>
-    <p class="lead">Every version of Pawnstorm that has been rated. The bar shows its level on a shared scale (${lo}–${hi}); the thin line is the margin of error. Experiments that were weaker than the best version so far stay on the list, marked as such, and never replace the headline rating.</p>
-    <div class="toolbar"><span class="sub">Sort by</span>
-      <button class="btn sm ${ui.sort === 'new' ? 'on' : ''}" data-set="sort:new">Newest first</button>
+    <p class="lead">Each version of Pawnstorm, as described in versions.ini. Ratings are computed live from every game played; the bar shows the level on a shared scale (${lo}–${hi}) and the thin line is the margin of error.</p>
+    <div class="toolbar"><span class="sub">Order</span>
+      <button class="btn sm ${ui.sort !== 'rating' ? 'on' : ''}" data-set="sort:order">Version order</button>
       <button class="btn sm ${ui.sort === 'rating' ? 'on' : ''}" data-set="sort:rating">Strongest first</button></div>
     <div class="vlist">${list.map(card).join('')}</div>`;
 }
 
 // ---- Tournaments ----
 function renderRun(r, b, compact) {
-  if (!r) return `<h3><span class="dot ${b.status}"></span>${esc(b.name)}</h3><div class="sub" style="margin-top:8px">Loading…</div>`;
+  if (!r) return `<h3><span class="dot ${b.status}"></span>${esc(friendlyText(b.name))}</h3><div class="sub" style="margin-top:8px">Loading…</div>`;
   b = r.brief; const s = r.summary;
   const pctDone = b.total ? Math.min(100, 100 * b.games / b.total) : 0;
   const eta = b.status === 'running' && b.games > 0 && b.total && !r.llr && b.type !== 'sprt' ? ' · about ' + dur(r.elapsed / b.games * (b.total - b.games)) + ' left' : '';
   const W = viewW() - 64;
-  let html = compact ? '' : `<h3><span class="dot ${b.status}"></span>${esc(b.name)} <span class="pill">${esc(b.type)}</span></h3>`;
-  html += `<div class="sub" style="margin-top:${compact ? 12 : 4}px">${esc(short(b.main))} · ${esc(b.tc)} per game · ${r.concurrency || '?'} games at a time · ${b.status === 'running' ? 'running for ' + dur(r.elapsed) : 'took ' + dur(r.elapsed)}${r.notes ? ' · ' + esc(r.notes) : ''}</div>
+  let html = compact ? '' : `<h3><span class="dot ${b.status}"></span>${esc(friendlyText(b.name))} <span class="pill">${esc(b.type)}</span></h3>`;
+  html += `<div class="sub" style="margin-top:${compact ? 12 : 4}px">${esc(short(b.main))} · ${esc(b.tc)} per game · ${r.concurrency || '?'} games at a time · ${b.status === 'running' ? 'running for ' + dur(r.elapsed) : 'took ' + dur(r.elapsed)}${r.notes ? " · " + esc(friendlyText(r.notes)) : ""}</div>
     <div class="cards">
       <div class="card"><div class="k">Games played</div><div class="v">${b.games}${b.total ? `<span class="sub" style="font-size:.55em"> ${b.type === 'sprt' ? 'up to' : '/'} ${b.total}</span>` : ''}</div>
         <div class="d">${s.w} won · ${s.d} drawn · ${s.l} lost${eta}</div>${b.total && b.type !== 'sprt' ? `<div class="bar"><div style="width:${pctDone}%"></div></div>` : ''}</div>`;
@@ -681,7 +716,7 @@ function renderRun(r, b, compact) {
   if (r.series.length > 1) html += `<h4>How far ahead it is as games come in</h4><div class="chart">${eloChart(r.series, W)}</div>`;
   if (r.opponents.length) html += `<h4>Results against each opponent</h4><div class="tbl"><table>
     <tr><th>Opponent</th><th class="r">Won</th><th class="r">Drew</th><th class="r">Lost</th><th class="r">Score</th><th class="r">Elo diff</th></tr>
-    ${r.opponents.map(o => `<tr><td>${esc(canon(o.name).replace(/^pawnstorm-/i, ''))}<div class="sub" style="font-size:11px">${o.anchor != null ? 'rated ' + o.anchor + ' · ' : ''}${o.w + o.d + o.l} games</div></td>
+    ${r.opponents.map(o => `<tr><td>${esc(short(o.name))}<div class="sub" style="font-size:11px">${o.anchor != null ? 'rated ' + o.anchor + ' · ' : ''}${o.w + o.d + o.l} games</div></td>
       <td class="r">${o.w}</td><td class="r">${o.d}</td><td class="r">${o.l}</td><td class="r"><b>${(o.score * 100).toFixed(0)}%</b></td>
       <td class="r ${cls(o.elo)}">${fmtElo(o.elo, o.err)}</td></tr>`).join('')}
   </table></div>`;
@@ -690,7 +725,7 @@ function renderRun(r, b, compact) {
     ${r.recent.slice(0, compact ? 10 : 12).map(g => {
       const me = b.main, rc = (g.result === '1/2-1/2') ? 'res-d' : ((g.result === '1-0') === (g.white === me)) ? 'res-w' : 'res-l';
       const how = g.termination && g.termination !== 'normal' ? `<span class="neg">${esc(g.termination)}</span> ${esc(g.reason)}` : esc(g.reason);
-      return `<tr><td>${g.n}</td><td>${esc(g.white)}</td><td>${esc(g.black)}</td><td class="${rc}">${esc(g.result)}</td><td>${how}</td><td class="r">${Math.ceil(g.plies / 2)}</td><td class="r">${esc(g.duration)}</td></tr>`;
+      return `<tr><td>${g.n}</td><td>${esc(short(g.white))}</td><td>${esc(short(g.black))}</td><td class="${rc}">${esc(g.result)}</td><td>${how}</td><td class="r">${Math.ceil(g.plies / 2)}</td><td class="r">${esc(g.duration)}</td></tr>`;
     }).join('')}
   </table></div>`;
   return html;
@@ -716,7 +751,7 @@ function square(r, f, p, last) {
 }
 function liveGame(g) {
   const whitePct = 50 + 50 * (2 / (1 + Math.exp(-g.cp / 250)) - 1);
-  const player = (name, t, to) => `<div class="player ${to ? 'to' : ''}"><span class="n">${to ? '<span class="dot running"></span>' : ''}${esc(name)}</span><span class="c">${clock(t)}</span></div>`;
+  const player = (name, t, to) => `<div class="player ${to ? 'to' : ''}"><span class="n">${to ? '<span class="dot running"></span>' : ''}${esc(short(name))}</span><span class="c">${clock(t)}</span></div>`;
   return `<div class="game">
     ${player(g.black, g.btime, g.thinking === g.black)}
     <div class="bw"><div class="evalbar"><div class="b" style="height:${100 - whitePct}%"></div><div class="w"></div></div>${boardHtml(g.fen, g.last)}</div>
@@ -739,7 +774,7 @@ function renderTournaments() {
       : r.perf != null ? `<div><b style="font-size:18px">${r.perf.toFixed(0)}</b> <span class="sub">±${r.perf_err.toFixed(0)}</span></div><div class="sub" style="font-size:12px">rating measured</div>`
       : r.status === 'stopped' ? '<span class="chip warn">Stopped</span>' : '';
     return `<div class="trow"><div class="trow-top" data-toggle="run:${esc(r.id)}"><span class="chev2">${open ? '▾' : '▸'}</span>
-      <div class="trow-main"><b>${esc(r.name)}</b> <span class="pill">${esc(r.type)}</span>
+      <div class="trow-main"><b>${esc(friendlyText(r.name))}</b> <span class="pill">${esc(r.type)}</span>
         <div class="sub" style="font-size:13px">${r.created ? when(r.created) : ''} · ${r.games} games${score != null ? ` · scored ${score.toFixed(0)}%` : ''}</div></div>
       <div class="trow-res">${res}</div></div>
       ${open ? `<div class="trow-body">${renderRun(details[r.id], r, true)}</div>` : ''}</div>`;
@@ -1023,9 +1058,9 @@ async function poll() {
   const j = async u => { try { return await (await fetch(u)).json(); } catch (e) { return undefined; } };
   const n = pollN++;
   try {
-    const [h, l, t, s, g, r, rt, a] = await Promise.all([
+    const [h, l, t, s, g, r, rt, a, cat] = await Promise.all([
       j('/api/health'), j('/api/lab'), j('/api/training'), j('/api/schedule'), j('/api/datagen'), j('/api/runs'),
-      j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined),
+      j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'),
     ]);
     if (r === undefined) throw new Error('unreachable');
     health = h ?? null; lab = l ?? null; schedule = s ?? null;
@@ -1035,6 +1070,7 @@ async function poll() {
     // Running generators first, then newest.
     gens.sort((x, y) => ((y.state === 'running') - (x.state === 'running')) || (y.started - x.started));
     runs = r;
+    if (cat) setCatalog(cat);
     if (rt) ratings = rt;
     if (a) ach = a;
     const want = runs.filter(x => x.status === 'running' || isOpen('run:' + x.id)).map(x => x.id);
