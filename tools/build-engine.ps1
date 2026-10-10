@@ -7,7 +7,8 @@ param(
     [Parameter(Mandatory)][string]$Name,
     [string]$Net = ''
 )
-$ErrorActionPreference = 'Stop'
+# Native tools write progress to stderr; with 'Stop', PowerShell 5 would treat that as a failure.
+$ErrorActionPreference = 'Continue'
 . "$PSScriptRoot\paths.ps1"
 
 $build = "$LabRoot\build"
