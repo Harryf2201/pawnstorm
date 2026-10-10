@@ -1,5 +1,6 @@
 # Self-play training data for Pawnstorm's NNUE, generated on GitHub-hosted runners.
 # Start it from the Actions tab ("Run workflow") or locally with tools\cloud-datagen.ps1.
+# Each job writes "<fen> | <score> | <result>" lines, the same format as the local generator.
 name: datagen
 
 on:
