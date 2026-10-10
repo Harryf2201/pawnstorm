@@ -3,6 +3,7 @@
 pub mod attacks;
 pub mod bench;
 pub mod board;
+pub mod datagen;
 pub mod eval;
 pub mod search;
 pub mod tt;

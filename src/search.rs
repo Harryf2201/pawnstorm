@@ -20,6 +20,8 @@ const HIST_MAX: i32 = 16384;
 pub struct Limits {
     pub depth: Option<i32>,
     pub nodes: Option<u64>,
+    /// Stop starting new iterations after this many nodes (used by datagen).
+    pub soft_nodes: Option<u64>,
     pub movetime: Option<u64>,
     pub time: [Option<u64>; 2],
     pub inc: [u64; 2],
@@ -347,7 +349,7 @@ impl Searcher {
                     pv.join(" ")
                 );
             }
-            if self.elapsed_ms() >= self.soft_ms {
+            if self.elapsed_ms() >= self.soft_ms || limits.soft_nodes.is_some_and(|n| self.nodes >= n) {
                 break;
             }
         }

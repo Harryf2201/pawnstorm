@@ -115,6 +115,7 @@
 <main>
   <div id="dash">
     <section id="rating"></section>
+    <section id="datagen"></section>
     <section id="ongoing"></section>
     <section id="finished"></section>
   </div>
@@ -166,8 +167,51 @@ function renderAchievements() {
     }).join('');
 }
 
+let gens = [], genRate = {};
+
+const big = n => n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
+
+/// Recent speed, measured between polls (falls back to the average since start).
+function trackRate(g) {
+  const prev = genRate[g.name], t = g.updated;
+  if (prev && t > prev.t && g.positions >= prev.positions) {
+    const inst = (g.positions - prev.positions) / (t - prev.t);
+    g.rate = prev.rate == null ? inst : prev.rate * 0.8 + inst * 0.2;
+  } else g.rate = prev?.rate ?? g.positions / Math.max(1, g.updated - g.started);
+  if (!prev || t > prev.t) genRate[g.name] = { t, positions: g.positions, rate: g.rate };
+}
+
+function renderDatagen() {
+  if (!gens.length) return '';
+  return `<h2>Data generation</h2>` + gens.map(g => {
+    const running = g.state === 'running' && g.now - g.updated < 15;
+    const state = g.state === 'finished' ? 'finished' : running ? 'running' : 'stopped';
+    const pct = Math.min(100, 100 * g.positions / g.target);
+    const left = running && g.rate > 0 ? dur((g.target - g.positions) / g.rate) : null;
+    const wdl = g.white_wins + g.draws + g.black_wins || 1;
+    const nps = g.nodes / Math.max(1, g.updated - g.started);
+    return `<div class="panel run">
+      <h3><span class="dot ${state}"></span>Self-play: ${esc(g.name)} <span class="pill">${state}</span></h3>
+      <div class="sub" style="margin-top:4px">${g.threads} CPU threads · ${big(g.soft_nodes)} nodes per move · running for ${dur((running ? g.now : g.updated) - g.started)}</div>
+      <div class="cards">
+        <div class="card" style="grid-column: span 2"><div class="k">Training positions</div>
+          <div class="v">${big(g.positions)} <span class="sub" style="font-size:.55em">/ ${big(g.target)} · ${pct.toFixed(1)}%</span></div>
+          <div class="d">${left ? '~' + left + ' left' : state}</div><div class="bar" style="height:10px"><div style="width:${pct}%"></div></div></div>
+        <div class="card"><div class="k">Speed</div><div class="v">${big(Math.round(g.rate || 0))}<span class="sub" style="font-size:.55em"> pos/s</span></div><div class="d">${big(Math.round(nps))} nodes/s searched</div></div>
+        <div class="card"><div class="k">Games played</div><div class="v">${big(g.games)}</div><div class="d">avg ${(g.plies / Math.max(1, g.games)).toFixed(0)} plies · ${(g.positions / Math.max(1, g.games)).toFixed(0)} kept per game</div></div>
+        <div class="card"><div class="k">Results</div><div class="v" style="font-size:18px;margin-top:6px">
+          <span>${(100 * g.white_wins / wdl).toFixed(0)}%</span> / <span class="sub">${(100 * g.draws / wdl).toFixed(0)}%</span> / <span>${(100 * g.black_wins / wdl).toFixed(0)}%</span></div>
+          <div class="d">white wins / draws / black wins</div></div>
+        <div class="card"><div class="k">Data on disk</div><div class="v">${(g.bytes / 1e9).toFixed(2)}<span class="sub" style="font-size:.55em"> GB</span></div><div class="d">text, converted for training later</div></div>
+      </div></div>`;
+  }).join('');
+}
+
 async function poll() {
   try {
+    gens = await (await fetch('/api/datagen')).json().catch(() => []);
+    gens.forEach(trackRate);
+    gens.sort((a, b) => b.started - a.started);
     runs = await (await fetch('/api/runs')).json();
     ach = await (await fetch('/api/achievements')).json();
     $('#ach-count').textContent = ach.items.filter(a => a.unlocked).length || '';
@@ -185,6 +229,7 @@ async function poll() {
 function render() {
   if (tab === 'ach') { $('#ach').innerHTML = renderAchievements(); return; }
   $('#rating').innerHTML = renderRating();
+  $('#datagen').innerHTML = renderDatagen();
   const live = runs.filter(r => r.status === 'running');
   $('#ongoing').innerHTML = `<h2>Ongoing tournaments (${live.length})</h2>` +
     (live.length ? live.map(r => `<div class="panel run">${renderRun(details[r.id], r)}</div>`).join('') : '<div class="empty">Nothing running right now.</div>');

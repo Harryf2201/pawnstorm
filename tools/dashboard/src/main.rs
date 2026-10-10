@@ -759,6 +759,38 @@ impl App {
         ids
     }
 
+    /// Self-play data generation runs: `<root>/datagen/<name>/status.txt` plus the size of the data written.
+    fn datagen(&self) -> String {
+        let dir = self.root.join("datagen");
+        let mut items = Vec::new();
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            let Ok(text) = std::fs::read_to_string(p.join("status.txt")) else { continue };
+            let mut fields = Vec::new();
+            for line in text.lines() {
+                if let Some((k, v)) = line.split_once('=') {
+                    let v = v.trim();
+                    let val = if v.parse::<f64>().is_ok() { v.to_string() } else { js(v) };
+                    fields.push(format!("{}:{}", js(k.trim()), val));
+                }
+            }
+            let bytes: u64 = std::fs::read_dir(&p)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|f| f.file_name().to_string_lossy().starts_with("data_"))
+                // Ask the file itself: directory listings cache sizes of files still being written.
+                .filter_map(|f| std::fs::metadata(f.path()).ok())
+                .map(|m| m.len())
+                .sum();
+            fields.push(format!("\"bytes\":{bytes}"));
+            fields.push(format!("\"name\":{}", js(&e.file_name().to_string_lossy())));
+            fields.push(format!("\"now\":{}", now()));
+            items.push(format!("{{{}}}", fields.join(",")));
+        }
+        format!("[{}]", items.join(","))
+    }
+
     /// Every achievement, unlocked or not, with a category and a difficulty key so the page
     /// can show each category as a ladder from easiest to hardest.
     fn achievements(&self) -> String {
@@ -959,6 +991,9 @@ impl App {
             let runs = self.runs.lock().unwrap();
             let items: Vec<String> = ids.iter().map(|id| run_brief(id, &runs[id])).collect();
             return ("200 OK", format!("[{}]", items.join(",")), "application/json");
+        }
+        if path == "/api/datagen" {
+            return ("200 OK", self.datagen(), "application/json");
         }
         if path == "/api/achievements" {
             return ("200 OK", self.achievements(), "application/json");
