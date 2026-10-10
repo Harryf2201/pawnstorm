@@ -1,7 +1,8 @@
-use pawnstorm::{attacks, bench, datagen, uci};
+use pawnstorm::{attacks, bench, datagen, nnue, uci};
 
 fn main() {
     attacks::init();
+    nnue::init();
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(|s| s.as_str()) {
         Some("bench") => {

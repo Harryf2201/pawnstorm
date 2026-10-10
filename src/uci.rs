@@ -145,6 +145,7 @@ pub fn run() {
                 println!("option name Hash type spin default 16 min 1 max 65536");
                 println!("option name Threads type spin default 1 min 1 max 1");
                 println!("option name Move Overhead type spin default 10 min 0 max 5000");
+                println!("option name EvalFile type string default <embedded>");
                 println!("uciok");
             }
             "isready" => println!("readyok"),
@@ -160,6 +161,16 @@ pub fn run() {
                 match name.as_str() {
                     "hash" => e.set_hash(value.parse().unwrap_or(16)),
                     "move overhead" => e.overhead_ms = value.parse().unwrap_or(10),
+                    "evalfile" => {
+                        e.wait();
+                        let path = tokens.get(name_end + 1..).map(|s| s.join(" ")).unwrap_or_default();
+                        if path != "<embedded>" && !path.is_empty() {
+                            match crate::nnue::load_file(&path) {
+                                Ok(()) => println!("info string loaded network {path}"),
+                                Err(err) => println!("info string {err}"),
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -178,7 +189,14 @@ pub fn run() {
                 break;
             }
             "d" => print!("{}", e.board.pretty()),
-            "eval" => println!("eval: {} cp (side to move)", evaluate(&e.board)),
+            "eval" => {
+                println!("classical: {} cp (side to move)", evaluate(&e.board));
+                if crate::nnue::active() {
+                    println!("nnue:      {} cp (side to move)", crate::nnue::evaluate_board(&e.board));
+                } else {
+                    println!("nnue:      no network loaded");
+                }
+            }
             "perft" => {
                 let depth = tokens.get(1).and_then(|s| s.parse().ok()).unwrap_or(5);
                 bench::divide(&e.board, depth);

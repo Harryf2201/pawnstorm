@@ -2,6 +2,7 @@
 
 use crate::board::*;
 use crate::eval::evaluate;
+use crate::nnue::{self, AccPair, Accumulator};
 use crate::tt::*;
 use crate::types::*;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +60,8 @@ pub struct Searcher {
     pv: Box<[[Move; MAX_PLY + 1]; MAX_PLY + 1]>,
     pv_len: [usize; MAX_PLY + 1],
     lmr: [[i32; 64]; 64],
+    /// NNUE accumulators per ply.
+    acc: Vec<AccPair>,
     start: Instant,
     soft_ms: u64,
     hard_ms: u64,
@@ -126,6 +129,7 @@ impl Searcher {
             pv: Box::new([[Move::NULL; MAX_PLY + 1]; MAX_PLY + 1]),
             pv_len: [0; MAX_PLY + 1],
             lmr,
+            acc: vec![[Accumulator { vals: [0; nnue::HIDDEN] }; 2]; MAX_PLY + 8],
             start: Instant::now(),
             soft_ms: u64::MAX,
             hard_ms: u64::MAX,
@@ -188,8 +192,18 @@ impl Searcher {
         false
     }
 
-    fn eval(&self, b: &Board) -> i32 {
-        evaluate(b).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+    fn eval(&self, b: &Board, ply: usize) -> i32 {
+        let e = if nnue::active() { nnue::evaluate(&self.acc[ply], b.stm) } else { evaluate(b) };
+        e.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+    }
+
+    /// Fills the accumulators for ply + 1 after `mv` is played from `b` at `ply`.
+    #[inline(always)]
+    fn nnue_update(&mut self, b: &Board, mv: Move, ply: usize) {
+        if nnue::active() {
+            let (parent, child) = self.acc.split_at_mut(ply + 1);
+            nnue::update(b, mv, &parent[ply], &mut child[0]);
+        }
     }
 
     #[inline(always)]
@@ -298,6 +312,9 @@ impl Searcher {
         if self.hashes.last() != Some(&board.hash) {
             self.hashes.push(board.hash);
         }
+        if nnue::active() {
+            nnue::refresh(board, &mut self.acc[0]);
+        }
 
         let legal = board.legal_moves();
         let mut best_move = match legal.first() {
@@ -382,7 +399,7 @@ impl Searcher {
                 return 0;
             }
             if ply >= MAX_PLY - 1 {
-                return if in_check { 0 } else { self.eval(b) };
+                return if in_check { 0 } else { self.eval(b, ply) };
             }
             alpha = alpha.max(-MATE + ply as i32);
             beta = beta.min(MATE - ply as i32 - 1);
@@ -419,7 +436,7 @@ impl Searcher {
         } else {
             raw_eval = match tt_entry {
                 Some(e) if e.eval > -MATE_BOUND => e.eval,
-                _ => self.eval(b),
+                _ => self.eval(b, ply),
             };
             eval = raw_eval;
             // A TT score is a better estimate than the static eval when its bound allows it.
@@ -464,6 +481,7 @@ impl Searcher {
                 let r = 3 + depth / 3 + ((eval - beta) / 200).min(3);
                 let mut nb = *b;
                 nb.make_null();
+                self.acc[ply + 1] = self.acc[ply];
                 self.stack[ply].cont = NO_CONT;
                 self.hashes.push(nb.hash);
                 let s = -self.negamax(&nb, depth - r, -beta, -beta + 1, ply + 1, !cut_node);
@@ -551,6 +569,7 @@ impl Searcher {
             let mut nb = *b;
             nb.make_move(mv);
             self.tt.prefetch(nb.hash);
+            self.nnue_update(b, mv, ply);
             if ext == 0 && nb.in_check() {
                 ext = 1;
             }
@@ -670,7 +689,7 @@ impl Searcher {
         self.seldepth = self.seldepth.max(ply);
         let in_check = b.in_check();
         if ply >= MAX_PLY - 1 {
-            return if in_check { 0 } else { self.eval(b) };
+            return if in_check { 0 } else { self.eval(b, ply) };
         }
         let pv_node = beta - alpha > 1;
 
@@ -694,7 +713,7 @@ impl Searcher {
         } else {
             raw_eval = match tt_entry {
                 Some(e) if e.eval > -MATE_BOUND => e.eval,
-                _ => self.eval(b),
+                _ => self.eval(b, ply),
             };
             best = raw_eval;
             if best >= beta {
@@ -728,6 +747,7 @@ impl Searcher {
             let mut nb = *b;
             nb.make_move(mv);
             self.tt.prefetch(nb.hash);
+            self.nnue_update(b, mv, ply);
             legal += 1;
             self.hashes.push(nb.hash);
             let score = -self.qsearch(&nb, -beta, -alpha, ply + 1);

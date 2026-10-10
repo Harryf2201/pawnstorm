@@ -1,0 +1,13 @@
+[package]
+name = "trainer"
+version = "0.1.0"
+edition = "2024"
+
+# Separate from the engine workspace so building the engine never needs CUDA.
+[workspace]
+
+[dependencies]
+bullet_lib = { path = "../../bullet/crates/bullet_lib", features = ["cuda"] }
+
+[profile.release]
+opt-level = 3
