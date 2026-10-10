@@ -185,12 +185,47 @@ fn write_status(path: &Path, cfg: &Config, stats: &Stats, started: u64, state: &
     }
 }
 
+/// Resuming into an existing folder: keep the running totals from its status.txt and cut each data
+/// file back to its last complete line (the process may have been killed mid-write).
+fn resume(out: &Path, stats: &Stats) -> Option<u64> {
+    for e in fs::read_dir(out).ok()?.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !(name.starts_with("data_") && name.ends_with(".txt")) {
+            continue;
+        }
+        if let Ok(bytes) = fs::read(e.path()) {
+            let keep = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |p| p + 1);
+            if keep < bytes.len() {
+                if let Ok(f) = fs::OpenOptions::new().write(true).open(e.path()) {
+                    let _ = f.set_len(keep as u64);
+                }
+            }
+        }
+    }
+    let text = fs::read_to_string(out.join("status.txt")).ok()?;
+    let get = |k: &str| text.lines().find_map(|l| l.strip_prefix(k).and_then(|v| v.strip_prefix('='))).and_then(|v| v.trim().parse::<u64>().ok());
+    stats.positions.store(get("positions")?, Relaxed);
+    stats.games.store(get("games").unwrap_or(0), Relaxed);
+    stats.white_wins.store(get("white_wins").unwrap_or(0), Relaxed);
+    stats.draws.store(get("draws").unwrap_or(0), Relaxed);
+    stats.black_wins.store(get("black_wins").unwrap_or(0), Relaxed);
+    stats.plies.store(get("plies").unwrap_or(0), Relaxed);
+    stats.nodes.store(get("nodes").unwrap_or(0), Relaxed);
+    get("started")
+}
+
 pub fn run(cfg: Config) {
     fs::create_dir_all(&cfg.out).expect("cannot create output directory");
     let cfg = Arc::new(cfg);
     let stats = Arc::new(Stats::default());
     let done = Arc::new(AtomicBool::new(false));
-    let started = unix_now();
+    let started = match resume(&cfg.out, &stats) {
+        Some(t) => {
+            println!("resuming: {} positions already in {}", stats.positions.load(Relaxed), cfg.out.display());
+            t
+        }
+        None => unix_now(),
+    };
     let status_path = cfg.out.join("status.txt");
     println!(
         "datagen: {} threads, target {} positions, {} soft nodes/move -> {}",
