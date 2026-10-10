@@ -791,6 +791,35 @@ impl App {
         format!("[{}]", items.join(","))
     }
 
+    /// Watchdog state: latest readings, the last hour of temperatures, and recent events.
+    fn health(&self) -> String {
+        let dir = self.root.join("health");
+        let mut fields = Vec::new();
+        for line in std::fs::read_to_string(dir.join("status.txt")).unwrap_or_default().lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                let v = v.trim();
+                let val = if !v.is_empty() && v.parse::<f64>().is_ok() { v.to_string() } else { js(v) };
+                fields.push(format!("{}:{}", js(k.trim()), val));
+            }
+        }
+        fields.push(format!("\"now\":{}", now()));
+        let history = std::fs::read_to_string(dir.join("history.csv")).unwrap_or_default();
+        let rows: Vec<String> = history
+            .lines()
+            .rev()
+            .take(720)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|l| format!("[{}]", l.split(',').map(|x| if x.trim().parse::<f64>().is_ok() { x.trim() } else { "null" }).collect::<Vec<_>>().join(",")))
+            .collect();
+        fields.push(format!("\"history\":[{}]", rows.join(",")));
+        let events = std::fs::read_to_string(dir.join("events.log")).unwrap_or_default();
+        let ev: Vec<String> = events.lines().rev().take(12).map(js).collect();
+        fields.push(format!("\"events\":[{}]", ev.join(",")));
+        format!("{{{}}}", fields.join(","))
+    }
+
     /// Network training runs: `<root>/training/<name>/log.txt` is the trainer's stdout.
     fn training(&self) -> String {
         let dir = self.root.join("training");
@@ -1092,6 +1121,15 @@ impl App {
             let runs = self.runs.lock().unwrap();
             let items: Vec<String> = ids.iter().map(|id| run_brief(id, &runs[id])).collect();
             return ("200 OK", format!("[{}]", items.join(",")), "application/json");
+        }
+        if path == "/api/health" {
+            return ("200 OK", self.health(), "application/json");
+        }
+        if let Some(mode) = path.strip_prefix("/api/control/") {
+            if matches!(mode, "pause" | "resume" | "auto") {
+                let ok = std::fs::write(self.root.join("health").join("control.txt"), mode).is_ok();
+                return ("200 OK", format!("{{\"ok\":{ok}}}"), "application/json");
+            }
         }
         if path == "/api/training" {
             return ("200 OK", self.training(), "application/json");

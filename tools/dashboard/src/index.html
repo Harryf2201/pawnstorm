@@ -21,7 +21,9 @@
   h2 { font-size: 13px; margin: 36px 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .8px; }
   .sub { color: var(--muted); }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
-  .pos { color: var(--good); } .neg { color: var(--bad); }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .warnc { color: var(--warn); }
+  .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
 
   /* Rating hero */
   .hero { display: grid; grid-template-columns: minmax(280px, 1fr) 2fr; gap: 16px; }
@@ -115,6 +117,7 @@
 <main>
   <div id="dash">
     <section id="rating"></section>
+    <section id="health"></section>
     <section id="datagen"></section>
     <section id="training"></section>
     <section id="ongoing"></section>
@@ -208,7 +211,69 @@ function renderDatagen() {
   }).join('');
 }
 
-let trains = [];
+let trains = [], health = null;
+
+async function control(mode) {
+  if (mode === 'pause' && !confirm('Pause data generation, GPU training and tournaments now?\n(Tournament games in progress may be lost on time.)')) return;
+  await fetch('/api/control/' + mode).catch(() => {});
+  setTimeout(poll, 800);
+}
+
+function renderHealth() {
+  const h = health;
+  if (!h || !h.updated) return `<h2>System health</h2><div class="warnbox">The watchdog isn't running, so temperatures aren't being monitored.</div>`;
+  const stale = h.now - h.updated > 30;
+  const lim = k => (String(h['limit_' + k] || '').split(',').map(Number));
+  const tile = (label, v, unit, key, sub, low) => {
+    let c = '';
+    if (v != null && v !== '' && key) {
+      const [w, cr] = lim(key);
+      const bad = low ? v <= cr : v >= cr, warn = low ? v <= w : v >= w;
+      c = bad ? 'neg' : warn ? 'warnc' : 'pos';
+    }
+    return `<div class="card"><div class="k">${label}</div><div class="v ${c}">${v == null || v === '' ? '–' : v}<span class="sub" style="font-size:.55em">${unit}</span></div><div class="d">${sub}</div></div>`;
+  };
+  const states = {
+    ok: ['pos', '✓ All good: everything within safe limits'],
+    warn: ['warnc', '⚠ Data generation paused: ' + h.reason],
+    critical: ['neg', '⛔ Everything paused: ' + h.reason],
+    manual: ['warnc', '⏸ Everything paused by you'],
+  };
+  const [sc, st] = stale ? ['neg', 'Watchdog stopped responding'] : states[h.level] || ['', h.level];
+  const lims = k => { const [w, c] = lim(k); return `pause at ${w} · stop all at ${c}`; };
+  const paused = h.level === 'manual' || h.level === 'warn' || h.level === 'critical';
+  let html = `<h2>System health</h2><div class="panel run">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div class="${sc}" style="font-weight:700;font-size:15px;flex:1">${esc(st)}</div>
+      ${paused ? `<button class="btn" onclick="control('resume')">▶ Resume</button>` : `<button class="btn" onclick="control('pause')">⏸ Pause everything</button>`}
+    </div>
+    ${h.warn_now && h.level === 'ok' ? `<div class="sub" style="margin-top:6px">Watching: ${esc(h.warn_now)}</div>` : ''}
+    <div class="cards">
+      ${tile('CPU temperature', h.cpu_temp, '°C', 'cpu_temp', `${h.cpu_power ?? '–'} W · ${h.cpu_load ?? '–'}% load · ${lims('cpu_temp')}`)}
+      ${tile('GPU temperature', h.gpu_temp, '°C', 'gpu_temp', `${h.gpu_power ?? '–'} W · ${h.gpu_load ?? '–'}% load · ${lims('gpu_temp')}`)}
+      ${tile('GPU memory', h.gpu_mem_temp, '°C', 'gpu_mem_temp', `${h.gpu_mem_used_gb ?? '–'} GB VRAM in use`)}
+      ${tile('SSD temperature', h.ssd_temp, '°C', 'ssd_temp', lims('ssd_temp'))}
+      ${tile('Free RAM', h.ram_free_gb, ' GB', 'ram_free_gb', `of ${h.ram_total_gb} GB`, true)}
+      ${tile('Free disk (C:)', h.disk_free_gb, ' GB', 'disk_free_gb', 'data + checkpoints live here', true)}
+    </div>`;
+  if (h.history.length > 2) html += `<h4>Temperatures, last hour</h4><div class="chart small">${tempChart(h.history)}</div>`;
+  if (h.events.length) html += `<h4>Watchdog log</h4><div class="tbl" style="padding:6px 12px;font-size:12px;font-family:Consolas,monospace;line-height:1.7">${h.events.map(e => `<div class="${/CRITICAL/.test(e) ? 'neg' : /WARNING|pause/.test(e) ? 'warnc' : 'sub'}">${esc(e)}</div>`).join('')}</div>`;
+  return html + '</div>';
+}
+
+function tempChart(rows) {
+  const W = 800, H = 160, L = 40, R = 12, T = 10, B = 20;
+  const t0 = rows[0][0], t1 = Math.max(rows[rows.length - 1][0], t0 + 1);
+  const X = t => L + (t - t0) / (t1 - t0) * (W - L - R), Y = v => T + (1 - (v - 20) / (105 - 20)) * (H - T - B);
+  let s = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:160px">`;
+  for (const v of [40, 60, 80, 100]) s += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="#2a313c"/><text x="${L - 6}" y="${Y(v) + 4}" fill="#8b949e" font-size="11" text-anchor="end">${v}°</text>`;
+  const lim = Number(String(health.limit_cpu_temp || '92').split(',')[0]);
+  s += `<line x1="${L}" x2="${W - R}" y1="${Y(lim)}" y2="${Y(lim)}" stroke="#f85149" stroke-dasharray="5 4" stroke-opacity=".7"/><text x="${W - R}" y="${Y(lim) - 4}" fill="#f85149" font-size="10" text-anchor="end">pause line</text>`;
+  const line = (i, color) => { const pts = rows.filter(r => r[i] != null).map(r => `${X(r[0])},${Y(r[i])}`); return pts.length ? `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>` : ''; };
+  s += line(1, '#58a6ff') + line(2, '#3fb950') + line(5, '#d29922');
+  s += `<text x="${L + 4}" y="${H - 4}" font-size="11"><tspan fill="#58a6ff">■ CPU</tspan>  <tspan fill="#3fb950">■ GPU</tspan>  <tspan fill="#d29922">■ SSD</tspan></text>`;
+  return s + '</svg>';
+}
 
 function lossChart(losses) {
   const W = 800, H = 160, L = 64, R = 12, T = 10, B = 22;
@@ -251,6 +316,7 @@ function renderTraining() {
 
 async function poll() {
   try {
+    health = await (await fetch('/api/health')).json().catch(() => null);
     trains = await (await fetch('/api/training')).json().catch(() => []);
     trains.sort((a, b) => b.started - a.started);
     gens = await (await fetch('/api/datagen')).json().catch(() => []);
@@ -273,6 +339,7 @@ async function poll() {
 function render() {
   if (tab === 'ach') { $('#ach').innerHTML = renderAchievements(); return; }
   $('#rating').innerHTML = renderRating();
+  $('#health').innerHTML = renderHealth();
   $('#datagen').innerHTML = renderDatagen();
   $('#training').innerHTML = renderTraining();
   const live = runs.filter(r => r.status === 'running');

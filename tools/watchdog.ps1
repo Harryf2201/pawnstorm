@@ -1,0 +1,230 @@
+# Hardware watchdog: polls temperatures, power, RAM and disk every few seconds and pauses
+# (suspends) heavy workloads if anything gets unsafe, resuming once things are back to normal.
+#   warn     -> pause data generation (the biggest CPU load)
+#   critical -> pause everything: data generation, GPU training, tournaments
+# State is written to testing\health\ for the dashboard. Control it by writing "auto", "pause"
+# or "resume" to testing\health\control.txt (the dashboard buttons do this).
+# CPU sensors come from LibreHardwareMonitor's local web server (http://localhost:8085).
+
+$Root = 'C:\Users\you\Claude\testing\health'
+New-Item -ItemType Directory -Force $Root | Out-Null
+$StatusFile = "$Root\status.txt"
+$EventsFile = "$Root\events.log"
+$HistoryFile = "$Root\history.csv"
+$SuspendedFile = "$Root\suspended.txt"
+$ControlFile = "$Root\control.txt"
+$Interval = 5
+
+# name = (warn, critical, resume); "low" checks trigger when the value is BELOW the limits.
+$Limits = @{
+    cpu_temp     = @{ warn = 92; crit = 98; ok = 85 }
+    gpu_temp     = @{ warn = 83; crit = 88; ok = 75 }
+    gpu_mem_temp = @{ warn = 95; crit = 100; ok = 85 }
+    ssd_temp     = @{ warn = 70; crit = 78; ok = 60 }
+    ram_free_gb  = @{ warn = 3; crit = 1.5; ok = 4; low = $true }
+    disk_free_gb = @{ warn = 25; crit = 10; ok = 30; low = $true }
+}
+$Labels = @{ cpu_temp = 'CPU temperature'; gpu_temp = 'GPU temperature'; gpu_mem_temp = 'GPU memory temperature'; ssd_temp = 'SSD temperature'; ram_free_gb = 'free RAM'; disk_free_gb = 'free disk space' }
+$Units = @{ cpu_temp = '°C'; gpu_temp = '°C'; gpu_mem_temp = '°C'; ssd_temp = '°C'; ram_free_gb = ' GB'; disk_free_gb = ' GB' }
+
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class Proc {
+    [DllImport("ntdll.dll")] public static extern int NtSuspendProcess(IntPtr h);
+    [DllImport("ntdll.dll")] public static extern int NtResumeProcess(IntPtr h);
+}
+'@
+
+function Log($msg) {
+    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
+    Add-Content -Path $EventsFile -Value $line -Encoding utf8
+}
+
+function Notify($title, $text) {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        $n = New-Object System.Windows.Forms.NotifyIcon
+        $n.Icon = [System.Drawing.SystemIcons]::Warning
+        $n.Visible = $true
+        $n.ShowBalloonTip(10000, $title, $text, 'Warning')
+        Start-Sleep 1
+        $n.Dispose()
+    } catch {}
+}
+
+function Num($s) {
+    if ($null -eq $s) { return $null }
+    $m = [regex]::Match([string]$s, '-?[0-9]+([.,][0-9]+)?')
+    if (-not $m.Success) { return $null }
+    [double]::Parse($m.Value.Replace(',', '.'), [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Read-Sensors {
+    $r = [ordered]@{}
+    $ids = @{}
+    try {
+        $j = Invoke-RestMethod http://localhost:8085/data.json -TimeoutSec 3
+        $stack = [Collections.Stack]::new(); $stack.Push($j)
+        while ($stack.Count) {
+            $n = $stack.Pop()
+            if ($n.SensorId) { $ids[$n.SensorId] = $n.Value }
+            foreach ($c in $n.Children) { $stack.Push($c) }
+        }
+    } catch {}
+    $r.cpu_temp = Num $ids['/intelcpu/0/temperature/16']
+    $r.cpu_power = Num $ids['/intelcpu/0/power/0']
+    $r.cpu_load = Num $ids['/intelcpu/0/load/0']
+    $r.gpu_mem_temp = Num $ids['/gpu-nvidia/0/temperature/3']
+    $r.ssd_temp = Num $ids['/nvme/0/temperature/0']
+    # GPU straight from the driver (works even if LibreHardwareMonitor is closed).
+    try {
+        $g = (nvidia-smi --query-gpu=temperature.gpu,power.draw,utilization.gpu,memory.used --format=csv,noheader,nounits) -split ','
+        $r.gpu_temp = Num $g[0]; $r.gpu_power = Num $g[1]; $r.gpu_load = Num $g[2]; $r.gpu_mem_used_gb = [math]::Round((Num $g[3]) / 1024, 1)
+    } catch { $r.gpu_temp = Num $ids['/gpu-nvidia/0/temperature/0'] }
+    $os = Get-CimInstance Win32_OperatingSystem
+    $r.ram_free_gb = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
+    $r.ram_total_gb = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+    $r.disk_free_gb = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
+    $r
+}
+
+# Workload groups. Tournaments include every engine process fastchess started.
+function Get-Group($group) {
+    switch ($group) {
+        'datagen' { @(Get-Process pawnstorm-datagen -ErrorAction SilentlyContinue) }
+        'training' { @(Get-Process trainer -ErrorAction SilentlyContinue) }
+        'tournaments' {
+            $fc = @(Get-Process fastchess -ErrorAction SilentlyContinue)
+            if (-not $fc) { return @() }
+            $all = Get-CimInstance Win32_Process
+            $ids = [Collections.Generic.HashSet[int]]::new()
+            foreach ($p in $fc) { [void]$ids.Add($p.Id) }
+            do {
+                $added = $false
+                foreach ($p in $all) {
+                    if ($ids.Contains([int]$p.ParentProcessId) -and $ids.Add([int]$p.ProcessId)) { $added = $true }
+                }
+            } while ($added)
+            @($ids | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+        }
+    }
+}
+
+$Suspended = @{}   # pid -> group
+
+function Save-Suspended { [IO.File]::WriteAllLines($SuspendedFile, [string[]]($Suspended.Keys | ForEach-Object { "$_" })) }
+
+function Suspend-Group($group) {
+    $n = 0
+    foreach ($p in Get-Group $group) {
+        if ($Suspended.ContainsKey($p.Id)) { continue }
+        try { [void][Proc]::NtSuspendProcess($p.Handle); $Suspended[$p.Id] = $group; $n++ } catch {}
+    }
+    if ($n) { Save-Suspended }
+    $n
+}
+
+function Resume-All {
+    foreach ($id in @($Suspended.Keys)) {
+        $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+        if ($p) { try { [void][Proc]::NtResumeProcess($p.Handle) } catch {} }
+        $Suspended.Remove($id)
+    }
+    Save-Suspended
+}
+
+# Recover from a previous watchdog that died while processes were suspended.
+if (Test-Path $SuspendedFile) {
+    foreach ($line in Get-Content $SuspendedFile) {
+        $p = Get-Process -Id ([int]$line) -ErrorAction SilentlyContinue
+        if ($p) { try { [void][Proc]::NtResumeProcess($p.Handle) } catch {} }
+    }
+    Remove-Item $SuspendedFile
+}
+if (-not (Test-Path $ControlFile)) { Set-Content $ControlFile 'auto' }
+
+Log 'watchdog started'
+$level = 'ok'           # current enforced level: ok | warn | critical | manual
+$warnTicks = 0; $critTicks = 0; $okTicks = 0; $missingTicks = 0
+$pauseCount = 0
+$reason = ''
+
+while ($true) {
+    $s = Read-Sensors
+    $control = (Get-Content $ControlFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+    $control = if ($control) { $control.Trim().ToLower() } else { 'auto' }
+
+    # Evaluate every limit.
+    $worst = 'ok'; $why = @(); $allOk = $true
+    foreach ($k in $Limits.Keys) {
+        $v = $s[$k]; $L = $Limits[$k]
+        if ($null -eq $v) { continue }
+        $low = [bool]$L.low
+        $isCrit = if ($low) { $v -le $L.crit } else { $v -ge $L.crit }
+        $isWarn = if ($low) { $v -le $L.warn } else { $v -ge $L.warn }
+        $isOk = if ($low) { $v -ge $L.ok } else { $v -le $L.ok }
+        if (-not $isOk) { $allOk = $false }
+        if ($isCrit) { $worst = 'critical'; $why += "$($Labels[$k]) $v$($Units[$k])" }
+        elseif ($isWarn) { if ($worst -ne 'critical') { $worst = 'warn' }; $why += "$($Labels[$k]) $v$($Units[$k])" }
+    }
+    # No CPU temperature at all is treated as a warning: we can't see what's happening.
+    if ($null -eq $s.cpu_temp) { $missingTicks++ } else { $missingTicks = 0 }
+    if ($missingTicks -ge 12) {
+        if ($worst -eq 'ok') { $worst = 'warn' }
+        $why += 'CPU temperature unavailable (is LibreHardwareMonitor running?)'
+        $allOk = $false
+    }
+
+    $critTicks = if ($worst -eq 'critical') { $critTicks + 1 } else { 0 }
+    $warnTicks = if ($worst -ne 'ok') { $warnTicks + 1 } else { 0 }
+    $okTicks = if ($allOk) { $okTicks + 1 } else { 0 }
+
+    if ($control -eq 'pause') {
+        if ($level -ne 'manual') { Log 'manual pause requested'; $level = 'manual'; $reason = 'paused by you' }
+        foreach ($g in 'datagen', 'training', 'tournaments') { [void](Suspend-Group $g) }
+    } elseif ($control -eq 'resume') {
+        Log 'manual resume requested'
+        Resume-All; $level = 'ok'; $reason = ''; $okTicks = 0
+        Set-Content $ControlFile 'auto'
+    } else {
+        if ($level -eq 'manual') { Resume-All; $level = 'ok'; $reason = '' }
+        # Escalate: critical needs 2 readings (10s), warn needs 6 (30s), so brief spikes are ignored.
+        if ($critTicks -ge 2 -and $level -ne 'critical') {
+            $level = 'critical'; $reason = $why -join ', '; $pauseCount++
+            $n = 0; foreach ($g in 'datagen', 'training', 'tournaments') { $n += Suspend-Group $g }
+            Log "CRITICAL: paused everything ($n processes) - $reason"
+            Notify 'Pawnstorm: everything paused' "Critical: $reason"
+        } elseif ($warnTicks -ge 6 -and $level -eq 'ok') {
+            $level = 'warn'; $reason = $why -join ', '; $pauseCount++
+            $n = Suspend-Group 'datagen'
+            Log "WARNING: paused data generation ($n processes) - $reason"
+            Notify 'Pawnstorm: data generation paused' $reason
+        }
+        # Keep newly started processes paused too while a pause is in force.
+        if ($level -eq 'critical') { foreach ($g in 'datagen', 'training', 'tournaments') { [void](Suspend-Group $g) } }
+        elseif ($level -eq 'warn') { [void](Suspend-Group 'datagen') }
+        # Resume after a cool-down that grows if pauses keep recurring (60s, 120s, 240s, ... max 20 min).
+        $needed = [math]::Min(240, 12 * [math]::Pow(2, [math]::Max(0, $pauseCount - 1)))
+        if ($level -in 'warn', 'critical' -and $okTicks -ge $needed) {
+            Resume-All
+            Log "resumed: all readings back to normal for $([math]::Round($needed * $Interval / 60, 1)) min"
+            $level = 'ok'; $reason = ''
+        }
+    }
+
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $groups = ($Suspended.Values | Sort-Object -Unique) -join ','
+    $lines = @("updated=$now", "level=$level", "control=$control", "reason=$reason", "warn_now=$($why -join ', ')", "paused_groups=$groups", "paused_processes=$($Suspended.Count)", "pause_count=$pauseCount")
+    foreach ($k in $s.Keys) { $lines += "$k=$($s[$k])" }
+    foreach ($k in $Limits.Keys) { $lines += "limit_${k}=$($Limits[$k].warn),$($Limits[$k].crit)" }
+    [IO.File]::WriteAllLines("$StatusFile.tmp", [string[]]$lines)
+    Move-Item -Force "$StatusFile.tmp" $StatusFile
+
+    Add-Content -Path $HistoryFile -Value "$now,$($s.cpu_temp),$($s.gpu_temp),$($s.cpu_power),$($s.gpu_power),$($s.ssd_temp),$($s.ram_free_gb)"
+    if ((Get-Item $HistoryFile).Length -gt 2MB) {
+        $keep = Get-Content $HistoryFile | Select-Object -Last 5000
+        [IO.File]::WriteAllLines($HistoryFile, [string[]]$keep)
+    }
+    Start-Sleep $Interval
+}
