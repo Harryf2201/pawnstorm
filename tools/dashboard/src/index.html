@@ -185,9 +185,38 @@ function trackRate(g) {
   if (!prev || t > prev.t) genRate[g.name] = { t, positions: g.positions, rate: g.rate };
 }
 
+function renderCloud(g) {
+  const running = g.state === 'running';
+  const total = g.jobs_total || 0, got = g.jobs_downloaded || 0;
+  const elapsed = (running ? g.now : g.updated) - g.started;
+  const planned = (g.minutes || 330) * 60 + 300;
+  const pct = running ? Math.min(99, 100 * elapsed / planned) : 100;
+  const perJob = got ? g.positions / got : null;
+  const projected = perJob ? perJob * total : null;
+  const rate = perJob ? perJob * total / ((g.minutes || 330) * 60) : null;
+  const state = running ? 'running' : 'finished';
+  return `<div class="panel run">
+    <h3><span class="dot ${state}"></span>Cloud batch ${esc(g.run_id)} <span class="pill">GitHub Actions</span> <span class="pill">${state}</span></h3>
+    <div class="sub" style="margin-top:4px">${total} jobs × ${g.minutes || 330} min · ${esc(g.cpu || 'cloud runners')} · <a href="${esc(g.url)}" target="_blank" style="color:var(--accent)">view on GitHub</a></div>
+    ${g.warning ? `<div class="warnbox">⚠ ${esc(g.warning)}</div>` : ''}
+    <div class="cards">
+      <div class="card" style="grid-column: span 2"><div class="k">Batch progress</div>
+        <div class="v">${running ? dur(Math.max(0, planned - elapsed)) + '<span class="sub" style="font-size:.55em"> left</span>' : 'done'}</div>
+        <div class="d">${g.jobs_running || 0} running · ${g.jobs_queued || 0} queued · ${g.jobs_done || 0} finished${g.jobs_failed ? ` · <span class="neg">${g.jobs_failed} failed</span>` : ''}</div>
+        <div class="bar" style="height:10px"><div style="width:${pct}%"></div></div></div>
+      <div class="card"><div class="k">Positions downloaded</div><div class="v">${big(g.positions || 0)}</div>
+        <div class="d">${got}/${total} jobs' data on this PC</div></div>
+      <div class="card"><div class="k">Expected from batch</div><div class="v">${projected ? '~' + big(Math.round(projected)) : '–'}</div>
+        <div class="d">${rate ? '≈ ' + big(Math.round(rate)) + ' pos/s · ' + big(Math.round(rate * 3600)) + '/hour' : 'known once the first job finishes'}</div></div>
+      <div class="card"><div class="k">Data on disk</div><div class="v">${(g.bytes / 1e9).toFixed(2)}<span class="sub" style="font-size:.55em"> GB</span></div><div class="d">gzipped text</div></div>
+    </div></div>`;
+}
+
 function renderDatagen() {
   if (!gens.length) return '';
-  return `<h2>Data generation</h2>` + gens.map(g => {
+  const stopped = gens.find(g => g.cloud_stopped);
+  return `<h2>Data generation</h2>` + (stopped ? `<div class="warnbox" style="margin-bottom:12px">⛔ Cloud generation stopped because GitHub reported: ${esc(stopped.cloud_stopped)}</div>` : '') + gens.map(g => {
+    if (g.source === 'cloud') return renderCloud(g);
     const running = g.state === 'running' && g.now - g.updated < 15;
     const state = g.state === 'finished' ? 'finished' : running ? 'running' : 'stopped';
     const pct = Math.min(100, 100 * g.positions / g.target);
@@ -321,7 +350,8 @@ async function poll() {
     trains.sort((a, b) => b.started - a.started);
     gens = await (await fetch('/api/datagen')).json().catch(() => []);
     gens.forEach(trackRate);
-    gens.sort((a, b) => b.started - a.started);
+    // Running generators first, then newest.
+    gens.sort((a, b) => ((b.state === 'running') - (a.state === 'running')) || (b.started - a.started));
     runs = await (await fetch('/api/runs')).json();
     ach = await (await fetch('/api/achievements')).json();
     $('#ach-count').textContent = ach.items.filter(a => a.unlocked).length || '';

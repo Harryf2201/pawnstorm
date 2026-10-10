@@ -22,14 +22,9 @@ param(
     [string]$Notes = ''
 )
 
-$Root = 'C:\Users\you\Claude\testing'
+. "$PSScriptRoot\paths.ps1"
+$Root = $LabRoot
 $Fastchess = "$Root\fastchess\fastchess-windows-x86-64\fastchess.exe"
-$Known = @{
-    stockfish   = 'C:\Users\you\Downloads\stockfish-windows-x86-64-avx2\stockfish\stockfish-windows-x86-64-avx2.exe'
-    dragon      = 'C:\Users\you\Downloads\dragon\dragon_05e2a7\Windows\dragon-64bit-avx2.exe'
-    rubichess   = 'C:\Users\you\Downloads\RubiChess-20240817\RubiChess-20240817\windows\RubiChess-20240817_x86-64-avx2.exe'
-    plentychess = 'C:\Users\you\Downloads\PlentyChess-7.0.37-windows-avx2.exe'
-}
 
 $fcArgs = @()
 $anchors = @()
@@ -82,6 +77,7 @@ $meta = @("name=$Name", "type=$Type", "tc=$TC", "total=$total", "main=$($names[0
 [IO.File]::WriteAllLines("$dir\meta.txt", $meta)
 [IO.File]::WriteAllText("$dir\command.txt", "$Fastchess $($fcArgs -join ' ')")
 
-$p = Start-Process -FilePath $Fastchess -ArgumentList $fcArgs -RedirectStandardOutput "$dir\output.txt" -RedirectStandardError "$dir\stderr.txt" -WindowStyle Hidden -PassThru
+# Run inside the run folder: fastchess writes a config.json into its working directory.
+$p = Start-Process -FilePath $Fastchess -ArgumentList $fcArgs -WorkingDirectory $dir -RedirectStandardOutput "$dir\output.txt" -RedirectStandardError "$dir\stderr.txt" -WindowStyle Hidden -PassThru
 Add-Content "$dir\meta.txt" "pid=$($p.Id)"
 "Started '$Name' ($total games max) -> $dir  [pid $($p.Id)]"

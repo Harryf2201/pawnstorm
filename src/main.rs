@@ -14,14 +14,17 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        // datagen <threads> <positions> <soft-nodes> <output-dir>
+        // datagen <threads> <positions> <soft-nodes> <output-dir> [max-seconds] [seed]
         Some("datagen") => {
             let arg = |i: usize, d: u64| args.get(i).and_then(|s| s.parse().ok()).unwrap_or(d);
+            let opt = |i: usize| args.get(i).and_then(|s| s.parse().ok()).filter(|&v: &u64| v > 0);
             datagen::run(datagen::Config {
                 threads: arg(2, 8) as usize,
                 positions: arg(3, 100_000_000),
                 soft_nodes: arg(4, 5000),
                 out: args.get(5).map(Into::into).unwrap_or_else(|| "datagen".into()),
+                max_seconds: opt(6),
+                seed: opt(7),
             });
         }
         _ => uci::run(),

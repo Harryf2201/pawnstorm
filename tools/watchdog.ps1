@@ -6,7 +6,8 @@
 # or "resume" to testing\health\control.txt (the dashboard buttons do this).
 # CPU sensors come from LibreHardwareMonitor's local web server (http://localhost:8085).
 
-$Root = 'C:\Users\you\Claude\testing\health'
+. "$PSScriptRoot\paths.ps1"
+$Root = "$LabRoot\health"
 New-Item -ItemType Directory -Force $Root | Out-Null
 $StatusFile = "$Root\status.txt"
 $EventsFile = "$Root\events.log"

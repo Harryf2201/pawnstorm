@@ -1,0 +1,80 @@
+# Self-play training data for Pawnstorm's NNUE, generated on GitHub-hosted runners.
+# Start it from the Actions tab ("Run workflow") or locally with tools\cloud-datagen.ps1.
+name: datagen
+
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Parallel jobs (max 20)"
+        default: "20"
+      minutes:
+        description: "Minutes of generation per job (keep under ~340: jobs are capped at 6 hours)"
+        default: "330"
+      soft_nodes:
+        description: "Soft node limit per move (local generator uses 5000)"
+        default: "5000"
+
+# Only one batch at a time; a second request waits for the first to finish.
+concurrency:
+  group: datagen
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - id: plan
+        run: |
+          n=$(( ${{ inputs.jobs }} ))
+          if [ "$n" -gt 20 ]; then n=20; fi
+          if [ "$n" -lt 1 ]; then n=1; fi
+          echo "shards=$(seq -s, 1 "$n" | sed 's/^/[/; s/$/]/')" >> "$GITHUB_OUTPUT"
+
+  generate:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        shard: ${{ fromJson(needs.plan.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (classical eval, same as the local generator)
+        run: |
+          # An empty network file makes the engine use its hand-crafted evaluation.
+          : > nets/default.bin
+          cargo build --release -p pawnstorm
+          ./target/release/pawnstorm perft
+
+      - name: Generate
+        run: |
+          out="data/shard-${{ matrix.shard }}"
+          mkdir -p "$out"
+          # Distinct seed per job: run id and shard number mixed together.
+          seed=$(( (${{ github.run_id }} * 1000 + ${{ matrix.shard }}) % 9007199254740991 ))
+          echo "cores: $(nproc), seed: $seed"
+          ./target/release/pawnstorm datagen "$(nproc)" 1000000000000 ${{ inputs.soft_nodes }} "$out" $(( ${{ inputs.minutes }} * 60 )) "$seed" | tr '\r' '\n' | tail -n 3
+          cat "$out/status.txt"
+
+      - name: Compress
+        run: |
+          cd "data/shard-${{ matrix.shard }}"
+          for f in data_*.txt; do gzip -6 "$f"; done
+          { echo "seed_run=${{ github.run_id }}"; echo "shard=${{ matrix.shard }}"; echo "cpu=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)"; } >> status.txt
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: data/shard-${{ matrix.shard }}/
+          compression-level: 0
+          retention-days: 7

@@ -21,6 +21,10 @@ pub struct Config {
     pub positions: u64,
     pub soft_nodes: u64,
     pub out: PathBuf,
+    /// Stop (cleanly, finishing each thread's current game) after this many seconds.
+    pub max_seconds: Option<u64>,
+    /// Base random seed; each thread mixes in its index. Defaults to the clock.
+    pub seed: Option<u64>,
 }
 
 #[derive(Default)]
@@ -205,7 +209,7 @@ pub fn run(cfg: Config) {
                 .spawn(move || {
                     let tt = Arc::new(TT::new(16));
                     let mut searcher = Box::new(Searcher::new(tt.clone(), Arc::new(AtomicBool::new(false))));
-                    let seed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+                    let seed = cfg.seed.unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64);
                     let mut rng = Rng(seed ^ (t as u64 + 1).wrapping_mul(0x9E3779B97F4A7C15) | 1);
                     let file = fs::OpenOptions::new()
                         .create(true)
@@ -228,6 +232,9 @@ pub fn run(cfg: Config) {
     let t0 = Instant::now();
     while handles.iter().any(|h| !h.is_finished()) {
         std::thread::sleep(std::time::Duration::from_secs(2));
+        if cfg.max_seconds.is_some_and(|s| t0.elapsed().as_secs() >= s) {
+            done.store(true, Relaxed);
+        }
         write_status(&status_path, &cfg, &stats, started, "running");
         let pos = stats.positions.load(Relaxed);
         let secs = t0.elapsed().as_secs_f64().max(1.0);

@@ -1,3 +1,14 @@
-/target
+# Build output (any crate)
+target/
+
+# Local, machine-specific files
+.claude/
+tools/engines.local.ps1
+config.json
+
+# Data never belongs in the repo
 *.pgn
 *.log
+*.bin
+!nets/default.bin
+*.txt.gz

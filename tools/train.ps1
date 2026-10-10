@@ -20,7 +20,8 @@ if ($Build -or -not (Test-Path "$trainer\target\release\trainer.exe")) {
     Pop-Location
 }
 
-$Root = 'C:\Users\you\Claude\testing\training'
+. "$PSScriptRoot\paths.ps1"
+$Root = "$LabRoot\training"
 $dir = "$Root\$Name"
 if (Test-Path "$dir\log.txt") { throw "Training run '$Name' already exists" }
 New-Item -ItemType Directory -Force $dir | Out-Null

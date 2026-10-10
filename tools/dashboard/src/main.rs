@@ -784,6 +784,9 @@ impl App {
                 .map(|m| m.len())
                 .sum();
             fields.push(format!("\"bytes\":{bytes}"));
+            if let Ok(stop) = std::fs::read_to_string(dir.join("cloud-STOPPED.txt")) {
+                fields.push(format!("\"cloud_stopped\":{}", js(stop.trim())));
+            }
             fields.push(format!("\"name\":{}", js(&e.file_name().to_string_lossy())));
             fields.push(format!("\"now\":{}", now()));
             items.push(format!("{{{}}}", fields.join(",")));
@@ -1180,7 +1183,11 @@ fn serve(app: &App, mut stream: TcpStream) {
 fn main() {
     attacks::init();
     let args: Vec<String> = std::env::args().collect();
-    let root = PathBuf::from(args.get(1).cloned().unwrap_or_else(|| "C:\\Users\\you\\Claude\\testing".into()));
+    // Default: the "testing" folder next to the repo (exe lives in <repo>/target/release/).
+    let root = args.get(1).map(PathBuf::from).unwrap_or_else(|| {
+        let exe = std::env::current_exe().unwrap_or_default();
+        exe.ancestors().nth(4).map(|p| p.join("testing")).unwrap_or_else(|| PathBuf::from("testing"))
+    });
     let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8000);
     let _ = std::fs::create_dir_all(root.join("runs"));
     let app = Arc::new(App { root, runs: Mutex::new(HashMap::new()) });
