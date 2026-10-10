@@ -54,8 +54,10 @@ if (-not (Get-Process pawnstorm-datagen* -ErrorAction SilentlyContinue)) {
     } else { "  local data generation already reached its target" }
 } else { "  local data generation already running" }
 
-# 6. Auto-training at data milestones.
-Start-Hidden 'auto-train.ps1'
+# 6. Keep datagen sized to the load (few threads during tournaments, many when idle).
+#    (auto-train.ps1, the old milestone scheduler, is retired: versions are now trained deliberately
+#    with train-version.ps1.)
+Start-Hidden 'datagen-adapt.ps1'
 
 Start-Sleep 2
 if (-not $NoBrowser) { Start-Process 'http://localhost:8000' }
