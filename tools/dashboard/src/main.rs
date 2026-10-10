@@ -491,6 +491,21 @@ fn engine_key(name: &str) -> String {
     out
 }
 
+/// "net-v0.8.1-316m" -> 316_000_000 (the position count tools/train-version.ps1 puts in the name).
+fn positions_from_name(name: &str) -> u64 {
+    name.split('-')
+        .rev()
+        .find_map(|seg| {
+            let (n, mult) = match (seg.strip_suffix('m'), seg.strip_suffix('b')) {
+                (Some(n), _) => (n, 1_000_000),
+                (_, Some(n)) => (n, 1_000_000_000),
+                _ => return None,
+            };
+            n.parse::<u64>().ok().map(|n| n * mult)
+        })
+        .unwrap_or(0)
+}
+
 /// One section of versions.ini: a named engine version and every engine name it has used.
 #[derive(Default, Clone)]
 struct Version {
@@ -1165,6 +1180,78 @@ impl App {
         format!("[{}]", items.join(","))
     }
 
+    /// Training data being prepared by tools/prepare-data.ps1 before the trainer starts:
+    /// `<name>.txt` (snapshot) -> `<name>.raw.bin` (convert) -> `<name>.bin` (shuffle). The text and raw
+    /// files only exist while this runs, so their presence means "still preparing".
+    fn prepare(&self) -> String {
+        let dir = self.root.join("training").join("data");
+        let mut names: Vec<String> = Vec::new();
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let f = e.file_name().to_string_lossy().to_string();
+            if let Some(b) = f.strip_suffix(".raw.bin").or_else(|| f.strip_suffix(".txt")) {
+                if !names.iter().any(|n| n == b) {
+                    names.push(b.to_string());
+                }
+            }
+        }
+        names.sort();
+        let items: Vec<String> = names
+            .iter()
+            .map(|name| {
+                let path = |ext: &str| dir.join(format!("{name}{ext}"));
+                let size = |ext: &str| std::fs::metadata(path(ext)).map(|m| m.len()).unwrap_or(0);
+                let (txt, raw, bin) = (size(".txt"), size(".raw.bin"), size(".bin"));
+                // The shuffle first writes shuffled parts into `<name>.bin.tmp/`, then merges them into `<name>.bin`.
+                let tmp_dir = path(".bin.tmp");
+                let tmp_files: Vec<std::fs::Metadata> =
+                    std::fs::read_dir(&tmp_dir).into_iter().flatten().flatten().filter_map(|f| f.metadata().ok()).collect();
+                let tmp_bytes: u64 = tmp_files.iter().map(|m| m.len()).sum();
+                let (step, stage, bytes) = if path(".bin").exists() || tmp_dir.exists() {
+                    (3, "shuffle", tmp_bytes + bin)
+                } else if raw > 0 {
+                    (2, "convert", raw)
+                } else {
+                    (1, "snapshot", txt)
+                };
+                let positions = positions_from_name(name);
+                // Converted files take 32 bytes per position (the shuffle writes everything twice); text lines
+                // are measured from the start of the file.
+                let total = if positions == 0 {
+                    0
+                } else if step == 3 {
+                    positions * 64
+                } else if step == 2 {
+                    positions * 32
+                } else {
+                    let mut buf = vec![0u8; 1 << 20];
+                    let n = File::open(path(".txt")).and_then(|mut f| f.read(&mut buf)).unwrap_or(0);
+                    let lines = buf[..n].iter().filter(|&&c| c == b'\n').count() as u64;
+                    if lines > 0 { positions * (n as u64 / lines) } else { 0 }
+                };
+                let tmp_mtime = std::fs::read_dir(&tmp_dir)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|f| mtime(&f.path()))
+                    .max()
+                    .unwrap_or(0);
+                let updated = [".txt", ".raw.bin", ".bin"].iter().map(|e| mtime(&path(e))).max().unwrap_or(0).max(tmp_mtime);
+                format!(
+                    "{{\"name\":{},\"stage\":{},\"step\":{},\"bytes\":{},\"total\":{},\"positions\":{},\"updated\":{},\"now\":{}}}",
+                    js(name),
+                    js(stage),
+                    step,
+                    bytes,
+                    total,
+                    positions,
+                    updated,
+                    now()
+                )
+            })
+            .collect();
+        format!("[{}]", items.join(","))
+    }
+
     /// Every achievement, unlocked or not, with a category and a difficulty key so the page
     /// can show each category as a ladder from easiest to hardest.
     fn achievements(&self) -> String {
@@ -1505,6 +1592,9 @@ impl App {
                 .collect();
             return ("200 OK", format!("[{}]", items.join(",")), "application/json");
         }
+        if path == "/api/prepare" {
+            return ("200 OK", self.prepare(), "application/json");
+        }
         if path == "/api/versions" {
             return ("200 OK", self.versions_json(), "application/json");
         }
@@ -1618,6 +1708,15 @@ mod tests {
         let v = parse_llr("LLR: 0.50 (-2.94, 2.94) [0.00, 5.00]").unwrap();
         assert_eq!((v[0], v[1], v[2]), (0.5, -2.94, 2.94));
         assert!(parse_llr("Finished match").is_none());
+    }
+
+    #[test]
+    fn positions_in_net_names() {
+        assert_eq!(positions_from_name("net-v0.8.1-316m"), 316_000_000);
+        assert_eq!(positions_from_name("net-v1.0-1.5b"), 0); // not an integer: unknown
+        assert_eq!(positions_from_name("net-v2.0-2b"), 2_000_000_000);
+        assert_eq!(positions_from_name("net-1024x8-219m-long"), 219_000_000);
+        assert_eq!(positions_from_name("gen1"), 0);
     }
 
     #[test]

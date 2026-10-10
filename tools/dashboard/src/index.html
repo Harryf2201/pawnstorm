@@ -137,6 +137,7 @@
   .vach { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   .vmore { color: var(--accent); font-size: 12px; margin-top: 10px; cursor: pointer; user-select: none; }
   .vsum { margin-top: 10px; }
+  .vbuild { margin-top: 12px; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--accent) 9%, transparent); font-size: 13px; }
   .vmeta { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 14px; margin: 10px 0 0; font-size: 13px; }
   .vmeta dt { color: var(--muted); } .vmeta dd { margin: 0; overflow-wrap: anywhere; }
   code { font: 12px Consolas, monospace; background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
@@ -295,7 +296,7 @@ document.addEventListener('click', e => {
 });
 
 // ---- Data ----
-let runs = [], details = {}, ach = null, ratings = [], gens = [], trains = [], health = null, lab = null, schedule = null, genRate = {};
+let runs = [], details = {}, ach = null, ratings = [], gens = [], trains = [], preps = [], health = null, lab = null, schedule = null, genRate = {}, prepRate = {};
 
 /// Recent speed, measured between polls (falls back to the average since start).
 function trackRate(g) {
@@ -543,13 +544,20 @@ function nowRows() {
   });
   const queued = gens.filter(g => g.source === 'cloud' && g.state === 'queued');
   if (queued.length) rows.push({ state: 'idle', icon: '☁️', t: `${queued.length} cloud batch${queued.length > 1 ? 'es' : ''} waiting in line`, d: 'Only one batch runs at a time.', go: 'lab' });
+  preps.forEach(p => {
+    const q = prepView(p), v = netVersion(p.name);
+    rows.push({
+      state: q.idle > 900 ? 'idle' : 'running', icon: '📦', t: `Preparing training data${v ? ' for ' + v : ''}`,
+      d: `Step ${p.step} of 3: ${PREP_STAGE[p.stage]}${q.pct != null ? ' · ' + q.pct.toFixed(0) + '%' : ''}${q.left ? ' · about ' + q.left + ' left' : ''}. Training starts by itself afterwards.`,
+      pct: q.pct, go: 'lab',
+    });
+  });
   const tr = trains.filter(t => t.state === 'running');
   tr.forEach(t => {
-    const done = t.end_sb ? Math.max(0, t.sb - 1 + (t.pct >= 100 ? 1 : t.pct / 100)) : 0;
-    const perSb = t.losses.length ? t.total_time / t.losses.length : null;
-    rows.push({ state: 'running', icon: '🧠', t: `Training neural network “${t.net || t.name}”`, d: `Round ${t.sb || 0} of ${t.end_sb}${perSb ? ' · about ' + dur(perSb * (t.end_sb - done)) + ' left' : ''} · on the graphics card`, pct: t.end_sb ? 100 * done / t.end_sb : null, go: 'lab' });
+    const g = trainProg(t), v = netVersion(t.net || t.name);
+    rows.push({ state: 'running', icon: '🧠', t: v ? `Training the ${v} network` : `Training neural network “${t.net || t.name}”`, d: `Round ${t.sb || 0} of ${t.end_sb}${g.left ? ' · about ' + g.left + ' left' : ''} · on the graphics card`, pct: t.end_sb ? g.pct : null, go: 'lab' });
   });
-  if (!tr.length) rows.push({ state: 'idle', icon: '🧠', t: 'Graphics card is idle', d: 'No neural network is being trained right now.', go: 'lab' });
+  if (!tr.length) rows.push({ state: 'idle', icon: '🧠', t: 'Graphics card is idle', d: preps.length ? 'Waiting for the training data to be ready.' : 'No neural network is being trained right now.', go: 'lab' });
   trains.filter(t => t.state === 'failed').slice(-1).forEach(t => alerts.push(`Training “${t.net || t.name}” failed: ${t.error}`));
   gens.filter(g => g.cloud_stopped).slice(0, 1).forEach(g => alerts.push(`Cloud data generation stopped: ${g.cloud_stopped}`));
   if (health && health.updated) {
@@ -650,6 +658,7 @@ function renderVersions(m) {
         <div class="vrate">${p ? `<b>${p.perf.toFixed(0)}</b><small>±${p.err.toFixed(0)} Elo · ${p.games} games</small>` : `<b class="sub">–</b><small>${status === 'planned' ? 'not built yet' : 'not rated yet'}</small>`}</div>
       </div>
       ${c && c.summary ? `<div class="vsum">${esc(c.summary)}</div>` : c ? '' : `<div class="vsum sub">This engine has been rated but is not described in versions.ini yet. Add a section with <code>engines = ${esc(name)}</code>.</div>`}
+      ${buildBlock(name, !!p)}
       ${c ? `<dl class="vmeta">${row('Network', esc(c.network))}${row('Data', esc(c.data))}${row('Based on', parentTxt)}${row('Branch', c.branch ? `<code>${esc(c.branch)}</code>` : '')}${row('Date', esc(c.date))}</dl>` : ''}`;
     if (p) {
       h += `<div class="level">${levelText(p)}</div>
@@ -902,15 +911,77 @@ function renderDatagen() {
   return gens.length ? section('sec:datagen', 'Training data', sum, body, true) : '';
 }
 
-function trainCard(t) {
+// ---- Version build pipeline: prepare the data (3 steps) -> train on the GPU -> rating tournament ----
+const PREP_STAGE = { snapshot: 'collecting positions from every data source', convert: 'converting positions to the trainer’s format', shuffle: 'shuffling the positions' };
+const PREP_STEPS = ['Collect', 'Convert', 'Shuffle'];
+/// "net-v0.8.1-316m" -> "v0.8.1" (the catalog name); other net names give ''.
+const netVersion = n => { const m = String(n).match(/^net-(v\d+(?:\.\d+)*[a-z]?)-/i); return m ? short(m[1]) : ''; };
+
+/// Speed of the preparation step, measured between polls.
+function trackPrep(p) {
+  const prev = prepRate[p.name];
+  if (prev && prev.stage === p.stage && p.now > prev.t && p.bytes >= prev.bytes) {
+    const inst = (p.bytes - prev.bytes) / (p.now - prev.t);
+    p.rate = prev.rate == null ? inst : prev.rate * 0.8 + inst * 0.2;
+  } else p.rate = prev && prev.stage === p.stage ? prev.rate : null;
+  if (!prev || p.now > prev.t || prev.stage !== p.stage) prepRate[p.name] = { t: p.now, bytes: p.bytes, rate: p.rate, stage: p.stage };
+}
+function prepView(p) {
+  const pct = p.total ? Math.min(99, 100 * p.bytes / p.total) : null;
+  const left = p.rate > 0 && p.total ? dur((p.total - p.bytes) / p.rate) : null;
+  return { pct, left, idle: p.now - p.updated };
+}
+function trainProg(t) {
   const done = t.end_sb ? Math.max(0, t.sb - 1 + (t.pct >= 100 ? 1 : t.pct / 100)) : 0;
-  const p = t.end_sb ? Math.min(100, 100 * done / t.end_sb) : 0;
+  const pct = t.end_sb ? Math.min(100, 100 * done / t.end_sb) : 0;
   const perSb = t.losses.length ? t.total_time / t.losses.length : null;
   const left = t.state === 'running' && perSb ? dur(perSb * (t.end_sb - done)) : null;
+  return { done, pct, left };
+}
+
+function prepCard(p) {
+  const v = netVersion(p.name), q = prepView(p), stalled = q.idle > 900;
+  return `<div class="panel run">
+    <h3><span class="dot ${stalled ? 'stopped' : 'running'}"></span>Preparing training data${v ? ' for ' + esc(v) : ''} <span class="pill">step ${p.step} of 3</span></h3>
+    <div class="sub" style="margin-top:4px">${esc(p.name)}${p.positions ? ' · about ' + Math.round(p.positions / 1e6) + 'M positions' : ''}</div>
+    <div class="vchips" style="margin-top:10px">${PREP_STEPS.map((s, i) => `<span class="chip ${i + 1 < p.step ? 'good' : i + 1 === p.step ? 'info' : ''}">${i + 1 < p.step ? '✓' : i + 1} ${s}</span>`).join('')}</div>
+    ${stalled ? `<div class="warnbox">No progress for ${dur(q.idle)}. Check that the preparation is still running.</div>` : ''}
+    <div class="cards">
+      <div class="card wide"><div class="k">Step ${p.step}: ${PREP_STAGE[p.stage]}</div>
+        <div class="v">${q.pct == null ? '–' : q.pct.toFixed(0) + '%'}<span class="sub" style="font-size:.55em">${q.left ? ' · about ' + q.left + ' left' : ''}</span></div>
+        <div class="d">${(p.bytes / 1e9).toFixed(1)} GB${p.total ? ' of about ' + (p.total / 1e9).toFixed(1) + ' GB' : ''}</div>
+        ${q.pct != null ? `<div class="bar big"><div style="width:${q.pct}%"></div></div>` : ''}</div>
+      <div class="card"><div class="k">Speed</div><div class="v">${p.rate > 0 ? (p.rate / 1e6).toFixed(0) : '–'}<span class="sub" style="font-size:.55em"> MB/s</span></div><div class="d">measured between refreshes</div></div>
+      <div class="card"><div class="k">Next</div><div class="v" style="font-size:16px">Training starts by itself</div><div class="d">then the new version is rated in a tournament</div></div>
+    </div>
+    ${helpBlock('help:prep', 'What is this step?', 'Before a network can be trained, the self-play positions from every data source are <b>collected</b> into one file, <b>converted</b> to the compact format the trainer reads, and <b>shuffled</b> so training sees them in random order. The GPU is idle until this finishes.')}
+  </div>`;
+}
+
+/// What the build of one version is doing right now (shown on its card on the Versions tab).
+function buildBlock(name, rated) {
+  const bar = p => p != null ? `<div class="bar"><div style="width:${p}%"></div></div>` : '';
+  let h = '';
+  preps.filter(x => netVersion(x.name) === name).forEach(x => {
+    const q = prepView(x);
+    h += `<div class="vbuild"><b>📦 Preparing training data</b> · step ${x.step} of 3, ${PREP_STAGE[x.stage]}${q.pct != null ? ' · ' + q.pct.toFixed(0) + '%' : ''}${q.left ? ' · about ' + q.left + ' left' : ''}${bar(q.pct)}</div>`;
+  });
+  const mine = trains.filter(t => netVersion(t.net || t.name) === name);
+  mine.filter(t => t.state === 'running').forEach(t => {
+    const g = trainProg(t);
+    h += `<div class="vbuild"><b>🧠 Training the network</b> · round ${t.sb || 0} of ${t.end_sb}${g.left ? ' · about ' + g.left + ' left' : ''}${bar(g.pct)}</div>`;
+  });
+  if (!h && !rated && mine.some(t => t.state === 'finished')) h = `<div class="vbuild"><b>✓ Network trained</b> · waiting for its rating tournament</div>`;
+  return h;
+}
+
+function trainCard(t) {
+  const { pct: p, left } = trainProg(t);
+  const tv = netVersion(t.net || t.name);
   const last = t.losses.length ? t.losses[t.losses.length - 1][1] : null;
   const dotState = t.state === 'running' ? 'running' : t.state === 'finished' ? 'finished' : 'stopped';
   return `<div class="panel run">
-    <h3><span class="dot ${dotState}"></span>Training: ${esc(t.net || t.name)} <span class="pill">${esc(t.state)}</span></h3>
+    <h3><span class="dot ${dotState}"></span>Training${tv ? " " + esc(tv) : ""}: ${esc(t.net || t.name)} <span class="pill">${esc(t.state)}</span></h3>
     <div class="sub" style="margin-top:4px">${esc(t.device || 'starting…')}${t.started ? ' · started ' + when(t.started) : ''}</div>
     ${t.state === 'failed' ? `<div class="warnbox">Training failed: ${esc(t.error)}</div>` : ''}
     <div class="cards">
@@ -948,15 +1019,16 @@ function renderTraining() {
   const rest = trains.filter(t => t.state !== 'running');
   const latest = rest[0];
   const older = rest.slice(1);
-  const sum = running.length ? 'training now' : 'idle' + (schedule && schedule.next_milestone && lab && lab.auto_train ? ' · next at ' + big(Number(schedule.next_milestone)) + ' positions' : '');
-  let body = `<p class="lead">A neural network is trained on the generated positions using the graphics card. When it finishes, it becomes a new engine version that is rated in a tournament.</p>` + renderSchedule();
-  body += running.map(trainCard).join('') + (latest ? trainCard(latest) : '');
+  const prepNames = preps.map(p => netVersion(p.name) || p.name).join(', ');
+  const sum = running.length ? 'training now' : preps.length ? 'preparing data for ' + esc(prepNames) : 'idle' + (schedule && schedule.next_milestone && lab && lab.auto_train ? ' · next at ' + big(Number(schedule.next_milestone)) + ' positions' : '');
+  let body = `<p class="lead">A new version starts with its training data being prepared, then a neural network is trained on it using the graphics card. When it finishes, it becomes an engine version that is rated in a tournament.</p>` + renderSchedule();
+  body += preps.map(prepCard).join('') + running.map(trainCard).join('') + (latest ? trainCard(latest) : '');
   if (older.length) {
     const open = isOpen('older-train');
     body += `<div class="panel run"><div class="now-row" data-toggle="older-train" style="border:0"><span class="chev2">${open ? '▾' : '▸'}</span><div class="now-main"><div class="now-t">${older.length} earlier training run${older.length > 1 ? 's' : ''}</div></div></div></div>`;
     if (open) body += older.map(trainCard).join('');
   }
-  return section('sec:training', 'Neural network training (GPU)', sum, body, running.length > 0);
+  return section('sec:training', 'Neural network training (GPU)', sum, body, running.length > 0 || preps.length > 0);
 }
 
 function renderHealth() {
@@ -1065,9 +1137,9 @@ async function poll() {
   const j = async u => { try { return await (await fetch(u)).json(); } catch (e) { return undefined; } };
   const n = pollN++;
   try {
-    const [h, l, t, s, g, r, rt, a, cat] = await Promise.all([
+    const [h, l, t, s, g, r, rt, a, cat, pr] = await Promise.all([
       j('/api/health'), j('/api/lab'), j('/api/training'), j('/api/schedule'), j('/api/datagen'), j('/api/runs'),
-      j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'),
+      j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'), j('/api/prepare'),
     ]);
     if (r === undefined) throw new Error('unreachable');
     health = h ?? null; lab = l ?? null; schedule = s ?? null;
@@ -1078,6 +1150,7 @@ async function poll() {
     gens.sort((x, y) => ((y.state === 'running') - (x.state === 'running')) || (y.started - x.started));
     runs = r;
     if (cat) setCatalog(cat);
+    if (pr) { preps = pr; preps.forEach(trackPrep); }
     if (rt) ratings = rt;
     if (a) ach = a;
     const want = runs.filter(x => x.status === 'running' || isOpen('run:' + x.id)).map(x => x.id);
