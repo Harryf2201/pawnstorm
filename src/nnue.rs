@@ -11,7 +11,7 @@ use crate::types::*;
 
 /// Must match the trainer's hidden size and bucket count (trainer args 6 and 7).
 pub const HIDDEN: usize = 512;
-pub const OUTPUT_BUCKETS: usize = 1;
+pub const OUTPUT_BUCKETS: usize = 8;
 const SCALE: i32 = 400;
 const QA: i32 = 255;
 const QB: i32 = 64;
