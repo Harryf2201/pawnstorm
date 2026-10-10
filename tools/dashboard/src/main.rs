@@ -791,6 +791,104 @@ impl App {
         format!("[{}]", items.join(","))
     }
 
+    /// Network training runs: `<root>/training/<name>/log.txt` is the trainer's stdout.
+    fn training(&self) -> String {
+        let dir = self.root.join("training");
+        let mut items = Vec::new();
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            let log_path = p.join("log.txt");
+            let Ok(raw) = std::fs::read_to_string(&log_path) else { continue };
+            // Strip ANSI colour/cursor codes; progress updates are separated by cursor-up codes.
+            let mut text = String::with_capacity(raw.len());
+            let mut chars = raw.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '\x1b' {
+                    if chars.peek() == Some(&'[') {
+                        chars.next();
+                        while let Some(&n) = chars.peek() {
+                            chars.next();
+                            if n.is_ascii_alphabetic() {
+                                break;
+                            }
+                        }
+                        text.push('\n');
+                    }
+                } else {
+                    text.push(c);
+                }
+            }
+            let field = |key: &str| {
+                text.lines().find_map(|l| l.trim().strip_prefix(key).map(|v| v.trim().trim_start_matches(':').trim().to_string()))
+            };
+            let end_sb: u64 = field("End Superbatch").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let device = text.lines().find_map(|l| l.trim().strip_prefix("Training on ").map(str::to_string)).unwrap_or_default();
+            let mut losses = Vec::new();
+            let (mut cur_sb, mut pct, mut pos_s, mut total_time) = (0u64, 0.0f64, 0.0f64, 0.0f64);
+            let nums = |s: &str| -> Vec<f64> {
+                s.split(|c: char| !(c.is_ascii_digit() || c == '.'))
+                    .filter_map(|x| x.parse().ok())
+                    .collect()
+            };
+            for l in text.lines().map(str::trim) {
+                if !l.starts_with("superbatch ") {
+                    continue;
+                }
+                let n = nums(l);
+                if l.contains("running loss") && n.len() >= 5 {
+                    // superbatch N | time T s | running loss L | P pos/sec | total time T s
+                    losses.push(format!("[{},{}]", n[0], n[2]));
+                    cur_sb = n[0] as u64;
+                    pct = 100.0;
+                    pos_s = n[3];
+                    total_time = n[4];
+                } else if l.contains('[') && n.len() >= 5 {
+                    // superbatch N [pct% (b/B batches, P pos/sec)]
+                    cur_sb = n[0] as u64;
+                    pct = n[1];
+                    pos_s = n[4];
+                }
+            }
+            let finished = text.contains("Total Training Time");
+            let errors = std::fs::read_to_string(p.join("err.txt")).unwrap_or_default();
+            let failed = errors.contains("panicked");
+            let updated = mtime(&log_path).max(mtime(&p.join("err.txt")));
+            let state = if failed {
+                "failed"
+            } else if finished {
+                "finished"
+            } else if now().saturating_sub(updated) < 60 {
+                "running"
+            } else {
+                "stopped"
+            };
+            let started = std::fs::metadata(&log_path)
+                .and_then(|m| m.created())
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_secs());
+            let err_line = errors.lines().find(|l| l.contains("Err") || l.contains("error")).unwrap_or("").to_string();
+            items.push(format!(
+                "{{\"name\":{},\"net\":{},\"device\":{},\"state\":{},\"end_sb\":{},\"sb\":{},\"pct\":{},\"pos_s\":{},\"total_time\":{},\"started\":{},\"updated\":{},\"now\":{},\"losses\":[{}],\"error\":{}}}",
+                js(&e.file_name().to_string_lossy()),
+                js(&field("Net Name").unwrap_or_default()),
+                js(&device),
+                js(state),
+                end_sb,
+                cur_sb,
+                num(pct),
+                num(pos_s),
+                num(total_time),
+                started,
+                updated,
+                now(),
+                losses.join(","),
+                js(&err_line)
+            ));
+        }
+        format!("[{}]", items.join(","))
+    }
+
     /// Every achievement, unlocked or not, with a category and a difficulty key so the page
     /// can show each category as a ladder from easiest to hardest.
     fn achievements(&self) -> String {
@@ -991,6 +1089,9 @@ impl App {
             let runs = self.runs.lock().unwrap();
             let items: Vec<String> = ids.iter().map(|id| run_brief(id, &runs[id])).collect();
             return ("200 OK", format!("[{}]", items.join(",")), "application/json");
+        }
+        if path == "/api/training" {
+            return ("200 OK", self.training(), "application/json");
         }
         if path == "/api/datagen" {
             return ("200 OK", self.datagen(), "application/json");
