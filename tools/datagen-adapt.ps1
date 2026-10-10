@@ -30,7 +30,8 @@ $idleSince = $null
 while ($true) {
     Set-Content "$LabRoot\datagen\adapt.heartbeat" (Get-Date -Format o)
     # (PowerShell names are case-insensitive, so this must not be called $busy: it would overwrite $Busy.)
-    $tournament = [bool](Get-Process fastchess -ErrorAction SilentlyContinue)
+    # GPU training also counts: its data loader plus 16 datagen threads pushed the CPU to 93°C.
+    $tournament = [bool](Get-Process fastchess, trainer -ErrorAction SilentlyContinue)
     $current = 0
     if (Test-Path "$dir\status.txt") { $current = [int](((Get-Content "$dir\status.txt" | Select-String '^threads=') -replace 'threads=', '')) }
     $running = [bool](Get-Process pawnstorm-datagen* -ErrorAction SilentlyContinue)
