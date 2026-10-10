@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pawnstorm Lab</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel2: #1c222c; --border: #2a313c;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --good: #3fb950; --bad: #f85149; --warn: #d29922;
+    --sq-light: #e8dcc0; --sq-dark: #a7825a; --hl: rgba(255, 214, 10, .45);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 24px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  .brand { font-weight: 700; font-size: 17px; letter-spacing: .3px; }
+  .brand span { color: var(--accent); }
+  nav button { background: none; border: 0; color: var(--muted); font: inherit; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  nav button.active { background: var(--panel2); color: var(--text); }
+  #updated { margin-left: auto; color: var(--muted); font-size: 12px; }
+  .layout { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 53px); }
+  aside { border-right: 1px solid var(--border); padding: 12px; overflow-y: auto; max-height: calc(100vh - 53px); position: sticky; top: 53px; }
+  main { padding: 20px 24px 40px; min-width: 0; }
+  .run-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; margin-bottom: 4px; border: 1px solid transparent; }
+  .run-item:hover { background: var(--panel); }
+  .run-item.sel { background: var(--panel2); border-color: var(--border); }
+  .run-item .t { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .run-item .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+  .dot.running { background: var(--good); box-shadow: 0 0 0 3px rgba(63,185,80,.2); animation: pulse 1.6s infinite; }
+  .dot.finished { background: var(--accent); }
+  .dot.stopped { background: var(--muted); }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(63,185,80,0); } }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 28px 0 10px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .6px; }
+  .sub { color: var(--muted); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .card .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  .card .v { font-size: 26px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .card .d { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .pos { color: var(--good); } .neg { color: var(--bad); }
+  .bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; margin-top: 10px; }
+  .bar > div { height: 100%; background: var(--accent); }
+  .llr { position: relative; height: 10px; margin-top: 12px; border-radius: 5px; background: linear-gradient(90deg, rgba(248,81,73,.35), var(--panel2) 50%, rgba(63,185,80,.35)); }
+  .llr .m { position: absolute; top: -3px; width: 4px; height: 16px; border-radius: 2px; background: var(--text); transform: translateX(-2px); }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; background: var(--panel2); }
+  tr:last-child td { border-bottom: 0; }
+  td.r, th.r { text-align: right; }
+  .chart { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .chart svg { width: 100%; height: 220px; display: block; }
+  .games { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+  .game { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+  .player { display: flex; justify-content: space-between; align-items: center; font-size: 13px; padding: 4px 2px; gap: 8px; }
+  .player .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+  .player .c { font-variant-numeric: tabular-nums; background: var(--panel2); padding: 1px 6px; border-radius: 4px; }
+  .player.to .c { background: var(--accent); color: #0b1220; font-weight: 700; }
+  .bw { display: flex; gap: 6px; }
+  .evalbar { width: 10px; border-radius: 3px; overflow: hidden; background: #333; display: flex; flex-direction: column; }
+  .evalbar .b { background: #2b2b2b; transition: height .4s; }
+  .evalbar .w { background: #f0f0f0; flex: 1; }
+  .board { flex: 1; display: grid; grid-template-columns: repeat(8, 1fr); aspect-ratio: 1; border-radius: 4px; overflow: hidden; container-type: inline-size; }
+  .sq { display: flex; align-items: center; justify-content: center; position: relative; }
+  .sq.l { background: var(--sq-light); } .sq.d { background: var(--sq-dark); }
+  .sq.hl::after { content: ""; position: absolute; inset: 0; background: var(--hl); }
+  .pc { font-family: "Segoe UI Symbol", "DejaVu Sans", serif; font-size: 10.5cqw; line-height: 1; position: relative; z-index: 1; }
+  .pc.w { color: #fff; text-shadow: 0 0 1px #000, 0 0 1px #000, 0 0 1px #000, 0 1px 2px rgba(0,0,0,.5); }
+  .pc.b { color: #161616; text-shadow: 0 0 1px rgba(255,255,255,.4); }
+  .ginfo { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .ginfo b { color: var(--text); }
+  .empty { color: var(--muted); padding: 40px; text-align: center; border: 1px dashed var(--border); border-radius: 10px; }
+  .warnbox { background: rgba(210,153,34,.1); border: 1px solid rgba(210,153,34,.4); color: var(--warn); border-radius: 10px; padding: 10px 14px; margin-top: 16px; }
+  .res-w { color: var(--good); font-weight: 700; } .res-l { color: var(--bad); font-weight: 700; } .res-d { color: var(--muted); font-weight: 700; }
+  .scroll { overflow-x: auto; }
+  @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } aside { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--border); } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">♞ Pawnstorm <span>Lab</span></div>
+  <nav>
+    <button data-tab="run" class="active">Tournaments</button>
+    <button data-tab="progress">Progress</button>
+  </nav>
+  <div id="updated"></div>
+</header>
+<div class="layout">
+  <aside id="runs"></aside>
+  <main id="main"><div class="empty">Loading…</div></main>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let runs = [], selected = localStorage.getItem('sel') || null, tab = 'run', detail = null;
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
+  render();
+});
+
+const fmtElo = (e, err) => e == null ? '–' : `${e > 0 ? '+' : ''}${e.toFixed(1)}${err != null ? ` <span class="sub" style="font-size:.6em">±${err.toFixed(1)}</span>` : ''}`;
+const cls = e => e > 0 ? 'pos' : e < 0 ? 'neg' : '';
+const dur = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`; };
+const clock = ms => { const s = Math.max(0, ms) / 1000; return s >= 60 ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : s.toFixed(1); };
+const ago = t => dur(Date.now() / 1000 - t) + ' ago';
+
+async function poll() {
+  try {
+    runs = await (await fetch('/api/runs')).json();
+    if ((!selected || !runs.some(r => r.id === selected)) && runs.length) selected = runs[0].id;
+    const want = selected;
+    const d = want ? await (await fetch('/api/run/' + encodeURIComponent(want))).json() : null;
+    if (want !== selected) return; // selection changed while this request was in flight
+    detail = d;
+    $('#updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    render();
+  } catch (e) {
+    $('#updated').innerHTML = '<span class="neg">Dashboard server not reachable</span>';
+  }
+}
+
+function render() {
+  renderRuns();
+  $('#main').innerHTML = tab === 'run' ? renderRun(detail) : renderProgress();
+}
+
+function renderRuns() {
+  $('#runs').innerHTML = runs.length ? runs.map(r => `
+    <div class="run-item ${r.id === selected ? 'sel' : ''}" data-id="${esc(r.id)}">
+      <div class="t"><span class="dot ${r.status}"></span>${esc(r.name)}</div>
+      <div class="s">${esc(r.type)} · ${r.games}${r.total ? '/' + r.total : ''} games · <span class="${cls(r.elo)}">${r.elo == null ? '' : (r.elo > 0 ? '+' : '') + r.elo.toFixed(0) + ' Elo'}</span></div>
+    </div>`).join('') : '<div class="sub" style="padding:10px">No runs yet. Start one with tools/match.ps1</div>';
+  document.querySelectorAll('.run-item').forEach(el => el.onclick = () => {
+    selected = el.dataset.id; localStorage.setItem('sel', selected); tab = 'run';
+    document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x.dataset.tab === 'run'));
+    detail = null; renderRuns(); $('#main').innerHTML = '<div class="empty">Loading…</div>';
+    poll();
+  });
+}
+
+function renderRun(r) {
+  if (!r) return `<div class="empty">${runs.length ? 'Loading…' : 'No tournament selected.'}</div>`;
+  const b = r.brief, s = r.summary;
+  const pct = b.total ? Math.min(100, 100 * b.games / b.total) : 0;
+  const eta = b.status === 'running' && b.games > 0 && b.total && !r.llr ? ' · ~' + dur(r.elapsed / b.games * (b.total - b.games)) + ' left' : '';
+  let html = `
+    <h1>${esc(b.name)}</h1>
+    <div class="sub"><span class="pill">${esc(b.type)}</span> &nbsp;${esc(b.tc)} · ${r.concurrency || '?'} games at a time · ${b.status === 'running' ? 'running for ' + dur(r.elapsed) : b.status + ' · took ' + dur(r.elapsed)}${r.notes ? ' · ' + esc(r.notes) : ''}</div>
+    <div class="cards">
+      <div class="card"><div class="k">Games</div><div class="v">${b.games}${b.total ? `<span class="sub" style="font-size:.55em"> / ${b.total}</span>` : ''}</div>
+        <div class="d">+${s.w} =${s.d} −${s.l}${eta}</div>${b.total ? `<div class="bar"><div style="width:${pct}%"></div></div>` : ''}</div>
+      <div class="card"><div class="k">${esc(b.main)} Elo vs field</div><div class="v ${cls(s.elo)}">${fmtElo(s.elo, s.err)}</div>
+        <div class="d">score ${(s.score * 100).toFixed(1)}% · LOS ${(s.los * 100).toFixed(1)}%</div></div>`;
+  if (b.perf != null) html += `
+      <div class="card"><div class="k">Estimated rating</div><div class="v">≈ ${b.perf.toFixed(0)}</div>
+        <div class="d">performance rating vs the anchor engines</div></div>`;
+  if (r.llr) {
+    const span = r.llr.hi - r.llr.lo, x = Math.max(0, Math.min(100, (r.llr.v - r.llr.lo) / span * 100));
+    const verdict = b.verdict ? (b.verdict.includes('H1') ? '<span class="pos">PASSED ✓ (H1 accepted)</span>' : '<span class="neg">FAILED ✗ (H0 accepted)</span>') : 'still testing…';
+    html += `
+      <div class="card"><div class="k">SPRT [${r.llr.elo0 ?? ''}, ${r.llr.elo1 ?? ''}]</div><div class="v">${r.llr.v.toFixed(2)}</div>
+        <div class="d">LLR, bounds ${r.llr.lo} … ${r.llr.hi} · ${verdict}</div><div class="llr"><div class="m" style="left:${x}%"></div></div></div>`;
+  }
+  html += '</div>';
+  if (r.problems.length) html += `<div class="warnbox">⚠ Problems: ${r.problems.map(p => `${p.count}× ${esc(p.kind)} (${esc(p.engine)})`).join(', ')}</div>`;
+
+  if (r.live.length) {
+    html += `<h2>Live games (${r.live.length})</h2><div class="games">${r.live.map(liveGame).join('')}</div>`;
+  } else if (b.status === 'running') {
+    html += `<h2>Live games</h2><div class="empty">Live boards need engine logging. Start runs with <code>-Live</code> to watch games.</div>`;
+  }
+
+  if (r.series.length > 1) html += `<h2>Elo estimate over time</h2><div class="chart">${eloChart(r.series)}</div>`;
+
+  if (r.opponents.length) html += `<h2>Results vs opponents</h2><div class="scroll"><table>
+    <tr><th>Opponent</th><th class="r">Rating</th><th class="r">Games</th><th class="r">W</th><th class="r">D</th><th class="r">L</th><th class="r">Score</th><th class="r">Elo diff</th></tr>
+    ${r.opponents.map(o => `<tr><td>${esc(o.name)}</td><td class="r">${o.anchor ?? '–'}</td><td class="r">${o.w + o.d + o.l}</td>
+      <td class="r">${o.w}</td><td class="r">${o.d}</td><td class="r">${o.l}</td><td class="r">${(o.score * 100).toFixed(1)}%</td>
+      <td class="r ${cls(o.elo)}">${fmtElo(o.elo, o.err)}</td></tr>`).join('')}
+  </table></div>`;
+
+  if (r.standings.length > 2) html += `<h2>Standings</h2><div class="scroll"><table>
+    <tr><th>#</th><th>Engine</th><th class="r">Points</th><th class="r">Games</th><th class="r">Score</th></tr>
+    ${r.standings.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}</td><td class="r">${x.points}</td><td class="r">${x.games}</td><td class="r">${(100 * x.points / Math.max(1, x.games)).toFixed(1)}%</td></tr>`).join('')}
+  </table></div>`;
+
+  if (r.recent.length) html += `<h2>Recent games</h2><div class="scroll"><table>
+    <tr><th>#</th><th>White</th><th>Black</th><th>Result</th><th>How</th><th class="r">Moves</th><th class="r">Duration</th></tr>
+    ${r.recent.map(g => {
+      const me = b.main, rc = (g.result === '1/2-1/2') ? 'res-d' : ((g.result === '1-0') === (g.white === me)) ? 'res-w' : 'res-l';
+      const how = g.termination && g.termination !== 'normal' ? `<span class="neg">${esc(g.termination)}</span> ${esc(g.reason)}` : esc(g.reason);
+      return `<tr><td>${g.n}</td><td>${esc(g.white)}</td><td>${esc(g.black)}</td><td class="${rc}">${esc(g.result)}</td><td>${how}</td><td class="r">${Math.ceil(g.plies / 2)}</td><td class="r">${esc(g.duration)}</td></tr>`;
+    }).join('')}
+  </table></div>`;
+  return html;
+}
+
+const GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+function boardHtml(fen, last) {
+  const rows = fen.split(' ')[0].split('/');
+  let h = '';
+  rows.forEach((row, r) => {
+    let f = 0;
+    for (const ch of row) {
+      if (/\d/.test(ch)) { for (let i = 0; i < +ch; i++) h += square(r, f++, null, last); }
+      else h += square(r, f++, ch, last);
+    }
+  });
+  return `<div class="board">${h}</div>`;
+}
+function square(r, f, p, last) {
+  const name = 'abcdefgh'[f] + (8 - r);
+  const hl = last && (last[0] === name || last[1] === name);
+  const piece = p ? `<span class="pc ${p === p.toUpperCase() ? 'w' : 'b'}">${GLYPH[p.toLowerCase()]}︎</span>` : '';
+  return `<div class="sq ${(r + f) % 2 ? 'd' : 'l'}${hl ? ' hl' : ''}">${piece}</div>`;
+}
+function liveGame(g) {
+  const whitePct = 50 + 50 * (2 / (1 + Math.exp(-g.cp / 250)) - 1);
+  const wTo = g.thinking === g.white, bTo = g.thinking === g.black;
+  const player = (name, t, to) => `<div class="player ${to ? 'to' : ''}"><span class="n">${to ? '<span class="dot running"></span>' : ''}${esc(name)}</span><span class="c">${clock(t)}</span></div>`;
+  return `<div class="game">
+    ${player(g.black, g.btime, bTo)}
+    <div class="bw"><div class="evalbar"><div class="b" style="height:${100 - whitePct}%"></div><div class="w"></div></div>${boardHtml(g.fen, g.last)}</div>
+    ${player(g.white, g.wtime, wTo)}
+    <div class="ginfo"><span>Move <b>${g.move}</b></span><span>Eval <b>${esc(g.eval)}</b></span><span>Depth <b>${g.depth || '–'}</b></span></div>
+  </div>`;
+}
+
+function lineChart(points, { yLabel = '', band = null, zero = true, xLabel = '' } = {}) {
+  const W = 800, H = 220, L = 46, R = 12, T = 12, B = 26;
+  const xs = points.map(p => p[0]), ys = points.map(p => p[1]).concat(band ? band.flatMap(b => [b[0], b[1]]) : []);
+  let x0 = Math.min(...xs), x1 = Math.max(...xs); if (x0 === x1) x1 = x0 + 1;
+  let y0 = Math.min(...ys, zero ? 0 : Infinity), y1 = Math.max(...ys, zero ? 0 : -Infinity);
+  const pad = (y1 - y0) * 0.1 || 10; y0 -= pad; y1 += pad;
+  const X = v => L + (v - x0) / (x1 - x0) * (W - L - R), Y = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+  let s = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
+  for (let i = 0; i <= 4; i++) {
+    const v = y0 + (y1 - y0) * i / 4;
+    s += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="#2a313c"/><text x="${L - 6}" y="${Y(v) + 4}" fill="#8b949e" font-size="11" text-anchor="end">${v.toFixed(0)}</text>`;
+  }
+  if (zero && y0 < 0 && y1 > 0) s += `<line x1="${L}" x2="${W - R}" y1="${Y(0)}" y2="${Y(0)}" stroke="#8b949e" stroke-dasharray="4 4"/>`;
+  if (band) {
+    const top = points.map((p, i) => `${X(p[0])},${Y(band[i][1])}`), bot = points.map((p, i) => `${X(p[0])},${Y(band[i][0])}`).reverse();
+    s += `<polygon points="${top.concat(bot).join(' ')}" fill="rgba(88,166,255,.15)"/>`;
+  }
+  s += `<polyline points="${points.map(p => `${X(p[0])},${Y(p[1])}`).join(' ')}" fill="none" stroke="#58a6ff" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  if (points.length < 30) points.forEach(p => s += `<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="3.5" fill="#58a6ff"/>`);
+  s += `<text x="${W - R}" y="${H - 6}" fill="#8b949e" font-size="11" text-anchor="end">${esc(xLabel)}</text>`;
+  s += `<text x="${L}" y="${H - 6}" fill="#8b949e" font-size="11">${esc(yLabel)}</text>`;
+  return s + '</svg>';
+}
+function eloChart(series) {
+  const c = v => Math.max(-800, Math.min(800, v ?? 0));
+  const pts = series.map(p => [p[0], c(p[1])]);
+  const band = series.map(p => [c(p[2]), c(p[3])]);
+  return lineChart(pts, { band, xLabel: 'games played →', yLabel: 'Elo (shaded = 95% confidence)' });
+}
+
+function renderProgress() {
+  const rated = runs.filter(r => r.perf != null).sort((a, b) => a.created - b.created);
+  let html = `<h1>Progress</h1><div class="sub">Estimated rating from each gauntlet against Elo-limited Stockfish (roughly the CCRL scale).</div>`;
+  if (rated.length) {
+    const best = Math.max(...rated.map(r => r.perf));
+    html += `<div class="cards"><div class="card"><div class="k">Latest estimate</div><div class="v">≈ ${rated[rated.length - 1].perf.toFixed(0)}</div><div class="d">${esc(rated[rated.length - 1].name)}</div></div>
+      <div class="card"><div class="k">Best so far</div><div class="v">≈ ${best.toFixed(0)}</div></div>
+      <div class="card"><div class="k">Gain since first</div><div class="v ${cls(rated[rated.length - 1].perf - rated[0].perf)}">${(rated[rated.length - 1].perf - rated[0].perf).toFixed(0)}</div></div></div>`;
+    if (rated.length > 1) html += `<h2>Rating history</h2><div class="chart">${lineChart(rated.map((r, i) => [i + 1, r.perf]), { zero: false, xLabel: 'gauntlet # →', yLabel: 'rating' })}</div>`;
+  } else html += `<div class="empty" style="margin-top:16px">No rating gauntlets yet.</div>`;
+  html += `<h2>All tests</h2><div class="scroll"><table><tr><th>Test</th><th>Type</th><th>When</th><th class="r">Games</th><th class="r">Elo</th><th class="r">Rating</th><th>Result</th></tr>
+    ${runs.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.type)}</td><td>${r.created ? ago(r.created) : ''}</td><td class="r">${r.games}</td>
+      <td class="r ${cls(r.elo)}">${r.elo == null ? '–' : fmtElo(r.elo, r.err)}</td><td class="r">${r.perf == null ? '–' : '≈ ' + r.perf.toFixed(0)}</td>
+      <td>${r.verdict ? (r.verdict.includes('H1') ? '<span class="pos">passed</span>' : '<span class="neg">failed</span>') : r.status}</td></tr>`).join('')}
+  </table></div>`;
+  return html;
+}
+
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "dashboard"
+version = "0.1.0"
+dependencies = [
+ "pawnstorm",
+]
+
+[[package]]
 name = "pawnstorm"
 version = "0.1.0"

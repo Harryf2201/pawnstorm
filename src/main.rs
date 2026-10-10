@@ -1,13 +1,4 @@
-#![allow(static_mut_refs)]
-
-mod attacks;
-mod bench;
-mod board;
-mod eval;
-mod search;
-mod tt;
-mod types;
-mod uci;
+use pawnstorm::{attacks, bench, uci};
 
 fn main() {
     attacks::init();
