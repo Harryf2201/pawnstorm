@@ -22,9 +22,17 @@ try {
         "A cloud batch is already in progress (run $($active[0].databaseId)). Not starting another."
         return
     }
+    $before = @(gh run list --workflow datagen.yml --limit 1 --json databaseId | ConvertFrom-Json).databaseId
     gh workflow run datagen.yml -f jobs=$Jobs -f minutes=$Minutes -f soft_nodes=$SoftNodes
-    Start-Sleep 5
-    $run = gh run list --workflow datagen.yml --limit 1 --json databaseId,url | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw "GitHub refused to start the workflow (see the message above)." }
+    # Wait for the new run to appear.
+    $run = $null
+    for ($i = 0; $i -lt 20 -and -not $run; $i++) {
+        Start-Sleep 3
+        $latest = gh run list --workflow datagen.yml --limit 1 --json databaseId,url | ConvertFrom-Json
+        if ($latest -and $latest.databaseId -ne $before) { $run = $latest }
+    }
+    if (-not $run) { throw "Started the workflow but couldn't find its run yet; check the Actions tab." }
     $dir = "$LabRoot\datagen\cloud-$($run.databaseId)"
     New-Item -ItemType Directory -Force $dir | Out-Null
     [IO.File]::WriteAllLines("$dir\launch.txt", [string[]]@("jobs=$Jobs", "minutes=$Minutes", "soft_nodes=$SoftNodes"))
