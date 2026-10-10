@@ -28,6 +28,7 @@ if ($StartCloud) {
 
 # 1. No new training or tournaments from here on.
 Stop-Script 'auto-train.ps1'
+Stop-Script 'datagen-adapt.ps1'
 
 # 2. Tournaments.
 $fc = @(Get-Process fastchess -ErrorAction SilentlyContinue)
