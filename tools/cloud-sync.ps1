@@ -1,4 +1,4 @@
-# Keeps the dashboard in sync with cloud data generation on GitHub Actions:
+﻿# Keeps the dashboard in sync with cloud data generation on GitHub Actions:
 #  - writes testing\datagen\cloud-<run id>\status.txt (jobs running/done, positions so far)
 #  - downloads each finished job's data (gzipped text, same format as the local generator)
 #  - if GitHub reports throttling, usage limits or account warnings, it stops syncing,
@@ -28,6 +28,32 @@ function Unix($iso) { if ($iso) { [DateTimeOffset]::Parse($iso).ToUnixTimeSecond
 
 # Phrases GitHub uses when it limits or flags Actions usage.
 $WarningPatterns = 'rate limit|usage limit|spending limit|exceeded|abuse|suspended|terms of service|billing|quota|throttl|has been disabled|account is locked'
+
+# Expected positions from one job of a batch, for live estimates before any job has finished:
+# the average job of earlier batches with the same eval (scaled to the job length). With no
+# finished NNUE batch yet, NNUE is assumed to give half the classical rate (it searches about
+# half as many nodes per second; positions per node are the same).
+function Estimate-PerJob($eval, $minutes) {
+    $per = @{}
+    foreach ($d in Get-ChildItem $DataRoot -Directory -Filter 'cloud-*') {
+        $shards = @(Get-ChildItem "$($d.FullName)\shard_*.status" -ErrorAction SilentlyContinue)
+        if (-not $shards.Count) { continue }
+        $ev = 'classical'; $m = 330
+        if (Test-Path "$($d.FullName)\launch.txt") {
+            $l = Get-Content "$($d.FullName)\launch.txt"
+            $e = $l | Select-String '^eval='; if ($e) { $ev = $e.ToString().Split('=')[1] }
+            $mm = $l | Select-String '^minutes='; if ($mm) { $m = [int]$mm.ToString().Split('=')[1] }
+        }
+        foreach ($sh in $shards) {
+            $p = (Get-Content $sh | Select-String '^positions=').ToString().Split('=')[1]
+            if (-not $per[$ev]) { $per[$ev] = @() }
+            $per[$ev] += [double]$p / $m
+        }
+    }
+    $rate = if ($per[$eval]) { ($per[$eval] | Measure-Object -Average).Average }
+            elseif ($per['classical']) { 0.5 * ($per['classical'] | Measure-Object -Average).Average } else { 0 }
+    [int64]($rate * $minutes)
+}
 
 function Sync-Run($run) {
     $id = $run.databaseId
@@ -83,16 +109,20 @@ function Sync-Run($run) {
     $finished = @($gen | Where-Object { $_.status -eq 'completed' }).Count
     $failed = @($gen | Where-Object { $_.conclusion -in 'failure', 'cancelled', 'timed_out' }).Count
     $state = if ($view.status -eq 'completed') { 'finished' } elseif ($view.status -in 'queued', 'pending', 'waiting', 'requested') { 'queued' } else { 'running' }
-    $started = Unix $view.createdAt
+    # Count time from when the first job actually started (a batch can sit queued for hours).
+    $jobStarts = @($gen | Where-Object { $_.startedAt -and $_.startedAt -notlike '0001*' } | ForEach-Object { Unix $_.startedAt })
+    $started = if ($jobStarts.Count) { ($jobStarts | Measure-Object -Minimum).Minimum } else { Unix $view.createdAt }
     $updated = if ($state -eq 'running') { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() } else { Unix $view.updatedAt }
     # cloud-datagen.ps1 records the requested job length; GitHub's run API doesn't expose inputs.
     $minutes = 330
     if (Test-Path "$dir\launch.txt") { $minutes = [int]((Get-Content "$dir\launch.txt" | Select-String '^minutes=').ToString().Split('=')[1]) }
+    $eval = 'classical'
+    if (Test-Path "$dir\launch.txt") { $e = Get-Content "$dir\launch.txt" | Select-String '^eval='; if ($e) { $eval = $e.ToString().Split('=')[1] } }
     $lines = @(
         "source=cloud", "state=$state", "run_id=$id", "url=$($view.url)", "started=$started", "updated=$updated",
         "jobs_total=$($gen.Count)", "jobs_running=$running", "jobs_queued=$queued", "jobs_done=$finished", "jobs_failed=$failed",
         "jobs_downloaded=$($done.Count)", "minutes=$minutes", "soft_nodes=5000", "target=0",
-        "cpu=$($cpus.Keys -join ' / ')", "warning=$warning"
+        "cpu=$($cpus.Keys -join ' / ')", "warning=$warning", "eval=$eval", "est_per_job=$(Estimate-PerJob $eval $minutes)"
     )
     foreach ($k in $sum.Keys) { $lines += "$k=$($sum[$k])" }
     [IO.File]::WriteAllLines("$dir\status.tmp", [string[]]$lines)
