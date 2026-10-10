@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory)][string]$Data,
     [int]$Superbatches = 40,
     [double]$Wdl = 0.4,
+    [int]$Hidden = 512,
+    [int]$Buckets = 1,
     [switch]$Build
 )
 
@@ -29,6 +31,6 @@ $dataPath = "$Root\data\$Data.bin"
 if (-not (Test-Path $dataPath)) { throw "No prepared data at $dataPath (run prepare-data.ps1)" }
 
 $p = Start-Process -FilePath "$trainer\target\release\trainer.exe" `
-    -ArgumentList $Name, $dataPath, "$dir\checkpoints", $Superbatches, $Wdl `
+    -ArgumentList $Name, $dataPath, "$dir\checkpoints", $Superbatches, $Wdl, $Hidden, $Buckets `
     -RedirectStandardOutput "$dir\log.txt" -RedirectStandardError "$dir\err.txt" -WindowStyle Hidden -PassThru
 "Training '$Name' started (pid $($p.Id)) -> $dir"

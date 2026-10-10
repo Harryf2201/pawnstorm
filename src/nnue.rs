@@ -1,4 +1,5 @@
-//! NNUE evaluation: (768 -> HIDDEN)x2 -> 1 with SCReLU, as trained by bullet (see trainer/).
+//! NNUE evaluation: (768 -> HIDDEN)x2 -> OUTPUT_BUCKETS with SCReLU, as trained by bullet (see trainer/).
+//! With several output buckets, the output weights used depend on how many pieces are on the board.
 //!
 //! Each side has an accumulator (the first layer's output). Moves only change a few input
 //! features, so the search updates accumulators incrementally instead of recomputing them.
@@ -8,14 +9,15 @@
 use crate::board::Board;
 use crate::types::*;
 
-/// Must match HIDDEN_SIZE in trainer/src/main.rs.
+/// Must match the trainer's hidden size and bucket count (trainer args 6 and 7).
 pub const HIDDEN: usize = 512;
+pub const OUTPUT_BUCKETS: usize = 1;
 const SCALE: i32 = 400;
 const QA: i32 = 255;
 const QB: i32 = 64;
 
 /// Size of bullet's quantised output (it may be padded to a multiple of 64).
-pub const NET_BYTES: usize = (768 * HIDDEN + HIDDEN + 2 * HIDDEN + 1) * 2;
+pub const NET_BYTES: usize = (768 * HIDDEN + HIDDEN + 2 * HIDDEN * OUTPUT_BUCKETS + OUTPUT_BUCKETS) * 2;
 
 #[derive(Clone, Copy)]
 #[repr(C, align(64))]
@@ -27,8 +29,9 @@ pub struct Accumulator {
 pub struct Network {
     feature_weights: [Accumulator; 768],
     feature_bias: Accumulator,
-    output_weights: [i16; 2 * HIDDEN],
-    output_bias: i16,
+    /// One row of 2 * HIDDEN weights per bucket (bullet saves them transposed this way).
+    output_weights: [[i16; 2 * HIDDEN]; OUTPUT_BUCKETS],
+    output_bias: [i16; OUTPUT_BUCKETS],
 }
 
 static DEFAULT_NET: &[u8] = include_bytes!("../nets/default.bin");
@@ -178,12 +181,15 @@ fn screlu_dot(acc: &[i16; HIDDEN], w: &[i16]) -> i32 {
 }
 
 /// Evaluation in centipawns from the side to move's point of view.
-pub fn evaluate(acc: &AccPair, stm: usize) -> i32 {
+/// `pieces` = number of pieces on the board (both colors, kings included), which picks the bucket.
+pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
     let net = net();
-    let mut out = screlu_dot(&acc[stm].vals, &net.output_weights[..HIDDEN])
-        + screlu_dot(&acc[stm ^ 1].vals, &net.output_weights[HIDDEN..]);
+    // Same rule as bullet's MaterialCount<N>: (pieces - 2) / ceil(32 / N).
+    let bucket = ((pieces.saturating_sub(2)) as usize / 32usize.div_ceil(OUTPUT_BUCKETS)).min(OUTPUT_BUCKETS - 1);
+    let w = &net.output_weights[bucket];
+    let mut out = screlu_dot(&acc[stm].vals, &w[..HIDDEN]) + screlu_dot(&acc[stm ^ 1].vals, &w[HIDDEN..]);
     out /= QA;
-    out += net.output_bias as i32;
+    out += net.output_bias[bucket] as i32;
     out * SCALE / (QA * QB)
 }
 
@@ -246,5 +252,5 @@ mod tests {
 pub fn evaluate_board(b: &Board) -> i32 {
     let mut acc = [Accumulator { vals: [0; HIDDEN] }; 2];
     refresh(b, &mut acc);
-    evaluate(&acc, b.stm)
+    evaluate(&acc, b.stm, b.occ().count_ones())
 }

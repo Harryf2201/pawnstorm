@@ -193,7 +193,7 @@ impl Searcher {
     }
 
     fn eval(&self, b: &Board, ply: usize) -> i32 {
-        let e = if nnue::active() { nnue::evaluate(&self.acc[ply], b.stm) } else { evaluate(b) };
+        let e = if nnue::active() { nnue::evaluate(&self.acc[ply], b.stm, b.occ().count_ones()) } else { evaluate(b) };
         e.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
