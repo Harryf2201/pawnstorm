@@ -3,32 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="dark">
 <title>Pawnstorm Lab</title>
 <style>
-  /* Light by default; dark follows the OS, or the manual toggle (data-theme on <html>). */
   :root {
-    color-scheme: light;
-    --bg: #f4f6f9; --panel: #ffffff; --panel2: #eef1f5; --border: #d3d9e0; --grid: #dde2e8;
-    --text: #1b2028; --muted: #5b6573; --accent: #0969da; --on-accent: #ffffff;
-    --good: #1a7f37; --bad: #cf222e; --warn: #9a6700; --gold: #b8860b;
-    --sq-light: #e8dcc0; --sq-dark: #a7825a; --hl: rgba(255, 214, 10, .5);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      color-scheme: dark;
-      --bg: #0e1116; --panel: #161b22; --panel2: #1c222c; --border: #2a313c; --grid: #2a313c;
-      --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --on-accent: #0b1220;
-      --good: #3fb950; --bad: #f85149; --warn: #d29922; --gold: #e3b341;
-      --hl: rgba(255, 214, 10, .45);
-    }
-  }
-  :root[data-theme="dark"] {
     color-scheme: dark;
     --bg: #0e1116; --panel: #161b22; --panel2: #1c222c; --border: #2a313c; --grid: #2a313c;
     --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --on-accent: #0b1220;
     --good: #3fb950; --bad: #f85149; --warn: #d29922; --gold: #e3b341;
-    --hl: rgba(255, 214, 10, .45);
+    --sq-light: #e8dcc0; --sq-dark: #a7825a; --hl: rgba(255, 214, 10, .45);
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
@@ -92,7 +75,7 @@
   .llr .m { position: absolute; top: -4px; width: 4px; height: 16px; border-radius: 2px; background: var(--text); transform: translateX(-2px); }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
   .dot.running { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); animation: pulse 1.6s infinite; }
-  .dot.finished { background: var(--accent); } .dot.stopped, .dot.idle { background: var(--muted); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  .dot.finished { background: var(--accent); } .dot.stopped, .dot.idle { background: var(--muted); }
   @keyframes pulse { 50% { box-shadow: 0 0 0 6px transparent; } }
 
   /* Overview hero */
@@ -244,7 +227,6 @@
   <div class="hright">
     <span id="updated"></span>
     <span id="labstate"></span>
-    <button id="theme" class="btn sm" title="Switch between automatic, light and dark theme">◐</button>
   </div>
 </header>
 <main><div id="view"></div></main>
@@ -262,19 +244,11 @@ const pct = (w, d, n) => n ? 100 * (w + d / 2) / n : null;
 
 // ---- UI state (remembered between visits) ----
 const TABS = [['overview', 'Overview', '🏠'], ['versions', 'Versions', '📈'], ['tournaments', 'Tournaments', '⚔️'], ['achievements', 'Achievements', '🏆'], ['lab', 'Lab', '🔧']];
-const ui = { state: {}, sort: 'new', group: 'cat', theme: 'auto' };
+const ui = { state: {}, sort: 'new', group: 'cat' };
 try { const s = JSON.parse(localStorage.getItem('pawn-ui') || '{}'); Object.assign(ui, s); } catch (e) {}
-const saveUi = () => { try { localStorage.setItem('pawn-ui', JSON.stringify({ state: ui.state, sort: ui.sort, group: ui.group, theme: ui.theme })); } catch (e) {} };
+const saveUi = () => { try { localStorage.setItem('pawn-ui', JSON.stringify({ state: ui.state, sort: ui.sort, group: ui.group })); } catch (e) {} };
 const isOpen = (k, def = false) => k in ui.state ? ui.state[k] : def;
 let tab = TABS.some(t => t[0] === location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
-
-function applyTheme() {
-  if (ui.theme === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = ui.theme;
-  $('#theme').textContent = { auto: '◐', light: '☀', dark: '☾' }[ui.theme];
-  $('#theme').title = `Theme: ${ui.theme} (click to change)`;
-}
-$('#theme').onclick = () => { ui.theme = { auto: 'light', light: 'dark', dark: 'auto' }[ui.theme] || 'auto'; saveUi(); applyTheme(); render(); };
-applyTheme();
 
 function setHtml(el, html) {
   if (el._h === html) return;
@@ -536,12 +510,12 @@ function nowRows() {
   live.forEach(r => {
     const d = details[r.id];
     const s = d && d.summary, n = s ? s.w + s.d + s.l : r.games;
-    const eta = d && r.games > 0 && r.total && !d.llr ? dur(d.elapsed / r.games * (r.total - r.games)) : null;
+    const eta = d && r.games > 0 && r.total && !d.llr && r.type !== 'sprt' ? dur(d.elapsed / r.games * (r.total - r.games)) : null;
     const sc = s && n ? ` · ${esc(short(r.main))} is scoring ${(100 * s.score).toFixed(0)}% so far` : '';
     rows.push({
       state: 'running', icon: '⚔️', t: r.name,
-      d: `Tournament · game ${r.games}${r.total ? ' of ' + r.total : ''}${eta ? ' · about ' + eta + ' left' : ''}${sc}`,
-      pct: r.total ? 100 * r.games / r.total : null, go: 'tournaments',
+      d: `${r.type === 'sprt' ? 'Improvement test' : 'Tournament'} · game ${r.games}${r.type === 'sprt' ? ' (stops as soon as the result is clear)' : r.total ? ' of ' + r.total : ''}${eta ? ' · about ' + eta + ' left' : ''}${sc}`,
+      pct: r.total && r.type !== 'sprt' ? 100 * r.games / r.total : null, go: 'tournaments',
     });
   });
   const genRun = gens.filter(g => g.state === 'running' && (g.source === 'cloud' || g.now - g.updated < 15));
@@ -680,13 +654,13 @@ function renderRun(r, b, compact) {
   if (!r) return `<h3><span class="dot ${b.status}"></span>${esc(b.name)}</h3><div class="sub" style="margin-top:8px">Loading…</div>`;
   b = r.brief; const s = r.summary;
   const pctDone = b.total ? Math.min(100, 100 * b.games / b.total) : 0;
-  const eta = b.status === 'running' && b.games > 0 && b.total && !r.llr ? ' · about ' + dur(r.elapsed / b.games * (b.total - b.games)) + ' left' : '';
+  const eta = b.status === 'running' && b.games > 0 && b.total && !r.llr && b.type !== 'sprt' ? ' · about ' + dur(r.elapsed / b.games * (b.total - b.games)) + ' left' : '';
   const W = viewW() - 64;
   let html = compact ? '' : `<h3><span class="dot ${b.status}"></span>${esc(b.name)} <span class="pill">${esc(b.type)}</span></h3>`;
   html += `<div class="sub" style="margin-top:${compact ? 12 : 4}px">${esc(short(b.main))} · ${esc(b.tc)} per game · ${r.concurrency || '?'} games at a time · ${b.status === 'running' ? 'running for ' + dur(r.elapsed) : 'took ' + dur(r.elapsed)}${r.notes ? ' · ' + esc(r.notes) : ''}</div>
     <div class="cards">
-      <div class="card"><div class="k">Games played</div><div class="v">${b.games}${b.total ? `<span class="sub" style="font-size:.55em"> / ${b.total}</span>` : ''}</div>
-        <div class="d">${s.w} won · ${s.d} drawn · ${s.l} lost${eta}</div>${b.total ? `<div class="bar"><div style="width:${pctDone}%"></div></div>` : ''}</div>`;
+      <div class="card"><div class="k">Games played</div><div class="v">${b.games}${b.total ? `<span class="sub" style="font-size:.55em"> ${b.type === 'sprt' ? 'up to' : '/'} ${b.total}</span>` : ''}</div>
+        <div class="d">${s.w} won · ${s.d} drawn · ${s.l} lost${eta}</div>${b.total && b.type !== 'sprt' ? `<div class="bar"><div style="width:${pctDone}%"></div></div>` : ''}</div>`;
   if (b.perf != null) html += `
       <div class="card"><div class="k">This test alone (rough)</div><div class="v">${b.perf.toFixed(0)} <span class="sub" style="font-size:.55em">±${b.perf_err.toFixed(0)}</span></div>
         <div class="d">${esc(short(b.main))}${b.derived ? ' · vs our earlier versions' : ' · vs Stockfish levels'}</div></div>`;
@@ -704,7 +678,7 @@ function renderRun(r, b, compact) {
   html += '</div>';
   if (r.problems.length) html += `<div class="warnbox">⚠ Problems: ${r.problems.map(p => `${p.count}× ${esc(p.kind)} (${esc(p.engine)})`).join(', ')}</div>`;
   if (r.live.length) html += `<h4>Games being played now (${r.live.length})</h4><div class="games">${r.live.map(liveGame).join('')}</div>`;
-  if (r.series.length > 1) html += `<h4>How far ahead it is as games come in</h4><div class="chart small">${eloChart(r.series, W)}</div>`;
+  if (r.series.length > 1) html += `<h4>How far ahead it is as games come in</h4><div class="chart">${eloChart(r.series, W)}</div>`;
   if (r.opponents.length) html += `<h4>Results against each opponent</h4><div class="tbl"><table>
     <tr><th>Opponent</th><th class="r">Won</th><th class="r">Drew</th><th class="r">Lost</th><th class="r">Score</th><th class="r">Elo diff</th></tr>
     ${r.opponents.map(o => `<tr><td>${esc(canon(o.name).replace(/^pawnstorm-/i, ''))}<div class="sub" style="font-size:11px">${o.anchor != null ? 'rated ' + o.anchor + ' · ' : ''}${o.w + o.d + o.l} games</div></td>
@@ -865,7 +839,6 @@ function renderLocalGen(g) {
 function renderDatagen() {
   const totalPos = gens.reduce((s, g) => s + (g.positions || 0), 0);
   const stopped = gens.find(g => g.cloud_stopped);
-  const active = g => g.source === 'cloud' ? ['running', 'queued'].includes(g.state) : g.state === 'running' || !g.finished_old;
   const isCloud = g => g.source === 'cloud';
   const recent = gens.filter(g => !isCloud(g) || g.state === 'running' || g.state === 'queued');
   const olderAll = gens.filter(g => isCloud(g) && g.state !== 'running' && g.state !== 'queued');
@@ -906,7 +879,7 @@ function trainCard(t) {
       <div class="card"><div class="k">GPU speed</div><div class="v">${big(Math.round(t.pos_s))}<span class="sub" style="font-size:.55em"> pos/s</span></div><div class="d">positions trained per second</div></div>
       <div class="card"><div class="k">Loss</div><div class="v">${last == null ? '–' : last.toFixed(5)}</div><div class="d">lower = closer fit to the data</div></div>
     </div>
-    ${t.losses.length > 1 ? `<h4>Loss by training round</h4><div class="chart small">${lossChart(t.losses, viewW() - 64)}</div>` : ''}
+    ${t.losses.length > 1 ? `<h4>Loss by training round</h4><div class="chart">${lossChart(t.losses, viewW() - 64)}</div>` : ''}
   </div>`;
 }
 
@@ -981,7 +954,7 @@ function renderHealth() {
       ${tile('Free RAM', h.ram_free_gb, ' GB', 'ram_free_gb', `of ${h.ram_total_gb} GB`, true)}
       ${tile('Free disk (C:)', h.disk_free_gb, ' GB', 'disk_free_gb', 'data + checkpoints live here', true)}
     </div>`;
-  if (h.history.length > 2) body += `<h4>Temperatures, last hour</h4><div class="chart small">${tempChart(h.history, viewW() - 64)}</div>`;
+  if (h.history.length > 2) body += `<h4>Temperatures, last hour</h4><div class="chart">${tempChart(h.history, viewW() - 64)}</div>`;
   if (h.events.length) body += `<h4>Watchdog log</h4><div class="tbl" style="padding:6px 12px;font-size:12px;font-family:Consolas,monospace;line-height:1.7;overflow-wrap:anywhere">${h.events.map(e => `<div class="${/CRITICAL/.test(e) ? 'neg' : /WARNING|pause/.test(e) ? 'warnc' : 'sub'}">${esc(e)}</div>`).join('')}</div>`;
   body += '</div>';
   const bad = stale || h.level !== 'ok';
@@ -1029,7 +1002,7 @@ function renderHeader() {
   setHtml($('#labstate'), lab ? `<span class="labstate" data-go="lab" title="Open the Lab tab"><span class="dot ${dot}"></span>${label}</span>` : '');
   const liveN = runs.filter(r => r.status === 'running').length;
   const unlocked = ach ? ach.items.filter(a => a.unlocked).length : 0;
-  const alerts = (health && (!health.updated || health.level !== 'ok' || health.now - health.updated > 30) ? 1 : 0) + trains.filter(t => t.state === 'failed').length * 0;
+  const alerts = health && (!health.updated || health.level !== 'ok' || health.now - health.updated > 30) ? 1 : 0;
   const badge = { tournaments: liveN ? `<span class="count">${liveN}</span>` : '', achievements: unlocked ? `<span class="count">${unlocked}</span>` : '', lab: alerts ? '<span class="count alert">!</span>' : '' };
   setHtml($('#tabs'), TABS.map(([k, n, ic]) => `<button data-go="${k}" class="${k === tab ? 'active' : ''}"><span class="ic">${ic}</span><span>${n}</span>${badge[k] || ''}</button>`).join(''));
 }
