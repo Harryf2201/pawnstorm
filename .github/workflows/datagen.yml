@@ -15,6 +15,9 @@ on:
       soft_nodes:
         description: "Soft node limit per move (local generator uses 5000)"
         default: "5000"
+      chain:
+        description: "Follow-up batches to start automatically after this one (only if every job succeeds)"
+        default: "0"
 
 # Only one batch at a time; a second request waits for the first to finish.
 concurrency:
@@ -79,3 +82,21 @@ jobs:
           path: data/shard-${{ matrix.shard }}/
           compression-level: 0
           retention-days: 7
+
+  # Starts the next batch in a chain. Runs only if every generate job succeeded, so any failure,
+  # cancellation or throttling ends the chain. The new run waits in the concurrency queue until
+  # this one has fully finished, so batches never overlap.
+  next:
+    needs: generate
+    if: ${{ success() && inputs.chain != '' && inputs.chain != '0' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          remaining=$(( ${{ inputs.chain }} - 1 ))
+          echo "starting the next batch ($remaining more after it)"
+          gh workflow run datagen.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" \
+            -f jobs=${{ inputs.jobs }} -f minutes=${{ inputs.minutes }} -f soft_nodes=${{ inputs.soft_nodes }} -f chain=$remaining
