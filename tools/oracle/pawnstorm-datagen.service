@@ -1,0 +1,13 @@
+[Unit]
+Description=Pawnstorm gen2 self-play data generation
+After=network.target
+
+[Service]
+User=ubuntu
+ExecStart=/home/ubuntu/run-datagen.sh
+Restart=always
+RestartSec=30
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

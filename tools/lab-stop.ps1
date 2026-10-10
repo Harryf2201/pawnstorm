@@ -63,9 +63,10 @@ if ($dg) {
 
 # 5. Background helpers and the dashboard.
 Stop-Script 'cloud-sync.ps1'
+Stop-Script 'oracle-sync.ps1'   # the Oracle server keeps generating; its data waits there for the next sync
 Stop-Script 'watchdog.ps1'
 # Clear the heartbeat files at once so the dashboard shows the lab as stopped immediately.
-Remove-Item "$LabRoot\health\status.txt", "$LabRoot\datagen\cloud-sync.heartbeat", "$LabRoot\training\auto-train.heartbeat" -ErrorAction SilentlyContinue
+Remove-Item "$LabRoot\health\status.txt", "$LabRoot\datagen\cloud-sync.heartbeat", "$LabRoot\datagen\oracle-sync.heartbeat", "$LabRoot\training\auto-train.heartbeat" -ErrorAction SilentlyContinue
 if (-not $KeepDashboard) { Get-Process dashboard -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
 
 $cloud = $null

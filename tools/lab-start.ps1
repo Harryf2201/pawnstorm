@@ -39,6 +39,8 @@ if (-not (Get-Process dashboard -ErrorAction SilentlyContinue)) {
 
 # 4. Cloud sync: downloads any cloud batches that finished while the PC was off.
 Start-Hidden 'cloud-sync.ps1' @('-IntervalSeconds', '120')
+# Data from the always-on Oracle Cloud server (configured in tools\engines.local.ps1, if any).
+if ($OracleHost) { Start-Hidden 'oracle-sync.ps1' }
 
 # 5. Local self-play data generation (resumes counts and files).
 if (-not (Get-Process pawnstorm-datagen* -ErrorAction SilentlyContinue)) {
