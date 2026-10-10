@@ -67,7 +67,7 @@ Get-Process dashboard -ErrorAction SilentlyContinue | Stop-Process -Force -Error
 $cloud = $null
 try {
     Push-Location $RepoRoot
-    $cloud = gh run list --workflow datagen.yml --limit 5 --json status,databaseId | ConvertFrom-Json | Where-Object { $_.status -ne 'completed' } | Select-Object -First 1
+    $cloud = (gh run list --workflow datagen.yml --limit 5 --json status,databaseId | ConvertFrom-Json) | Where-Object { $_.status -ne 'completed' } | Select-Object -First 1
     Pop-Location
 } catch {}
 ""

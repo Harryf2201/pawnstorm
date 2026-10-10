@@ -19,7 +19,8 @@ if (Test-Path "$LabRoot\datagen\cloud-STOPPED.txt") {
 }
 Push-Location $RepoRoot
 try {
-    $active = gh run list --workflow datagen.yml --limit 20 --json databaseId,status | ConvertFrom-Json |
+    # Parentheses make PowerShell 5 enumerate the JSON array instead of passing it as one object.
+    $active = (gh run list --workflow datagen.yml --limit 20 --json databaseId,status | ConvertFrom-Json) |
         Where-Object { $_.status -in 'queued', 'in_progress', 'waiting', 'pending', 'requested' }
     if ($active) {
         "A cloud batch is already in progress (run $($active[0].databaseId)). Not starting another."
