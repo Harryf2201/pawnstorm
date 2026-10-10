@@ -482,6 +482,8 @@ struct Rated {
     games: f64,
     first_seen: u64,
     live: bool,
+    /// Record against every opponent over all runs: (name, wins, draws, losses, anchor rating).
+    vs: Vec<(String, f64, f64, f64, Option<f64>)>,
 }
 
 /// One joint maximum-likelihood fit over every game in every run. Anchor engines (Elo-limited
@@ -510,6 +512,8 @@ fn global_ratings(runs: &HashMap<String, RunState>) -> Vec<Rated> {
     let mut pairs: HashMap<(usize, usize), [f64; 3]> = HashMap::new();
     for r in runs.values() {
         let running = status(r) == "running";
+        // Only the engine under test counts as live, not the opponents it is playing.
+        let main_key = engine_key(&r.meta.main);
         let t = r.meta.created;
         for (n, a) in &r.meta.anchors {
             let i = id_of(n, t, false, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
@@ -522,8 +526,8 @@ fn global_ratings(runs: &HashMap<String, RunState>) -> Vec<Rated> {
                 "1/2-1/2" => 0.5,
                 _ => continue,
             };
-            let w = id_of(&g.white, t, running, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
-            let b = id_of(&g.black, t, running, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
+            let w = id_of(&g.white, t, running && engine_key(&g.white) == main_key, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
+            let b = id_of(&g.black, t, running && engine_key(&g.black) == main_key, &mut idx, &mut names, &mut anchor, &mut first_seen, &mut live);
             if w == b {
                 continue;
             }
@@ -563,9 +567,12 @@ fn global_ratings(runs: &HashMap<String, RunState>) -> Vec<Rated> {
             break;
         }
     }
+    let mut vs: Vec<Vec<(String, f64, f64, f64, Option<f64>)>> = vec![Vec::new(); n];
     for (&(i, j), c) in &pairs {
         games[i] += c[0] + c[1] + c[2];
         games[j] += c[0] + c[1] + c[2];
+        vs[i].push((names[j].clone(), c[0], c[1], c[2], anchor[j]));
+        vs[j].push((names[i].clone(), c[2], c[1], c[0], anchor[i]));
     }
     (0..n)
         .filter(|&i| anchor[i].is_none() && games[i] > 0.0)
@@ -576,6 +583,7 @@ fn global_ratings(runs: &HashMap<String, RunState>) -> Vec<Rated> {
             games: games[i],
             first_seen: first_seen[i],
             live: live[i],
+            vs: std::mem::take(&mut vs[i]),
         })
         .collect()
 }
@@ -1062,6 +1070,8 @@ impl App {
             desc: String,
             date: Option<u64>,
             run: String,
+            /// The engine version that earned it (empty while locked).
+            main: String,
             tier: &'static str,
         }
         // Keyed by an id so the first (earliest) unlock wins.
@@ -1111,6 +1121,7 @@ impl App {
                     desc: if g.reason.is_empty() { format!("{main} won a game") } else { format!("{main} won a game ({})", g.reason) },
                     date,
                     run: r.meta.name.clone(),
+                    main: main.clone(),
                     tier: if strong { "gold" } else { "bronze" },
                 });
             }
@@ -1130,6 +1141,7 @@ impl App {
                             desc: format!("Scored {:.0}% over {} games (+{} ={} −{})", score * 100.0, n, c[0], c[1], c[2]),
                             date,
                             run: r.meta.name.clone(),
+                            main: main.clone(),
                             tier: if full_strength(opp).is_some() { "gold" } else { "silver" },
                         });
                     }
@@ -1144,6 +1156,7 @@ impl App {
                             desc: format!("{main} measured at {v:.0} ±{e:.0}"),
                             date,
                             run: r.meta.name.clone(),
+                            main: main.clone(),
                             tier: if *step >= 3000.0 { "gold" } else { "silver" },
                         });
                     }
@@ -1161,6 +1174,7 @@ impl App {
                         desc: format!("Passed SPRT: {}", r.meta.name),
                         date,
                         run: r.meta.name.clone(),
+                        main: main.clone(),
                         tier: "silver",
                     });
                 }
@@ -1177,6 +1191,7 @@ impl App {
                     desc: "Across all tests".into(),
                     date,
                     run: r.meta.name.clone(),
+                    main: main.clone(),
                     tier: "bronze",
                 });
             }
@@ -1191,6 +1206,7 @@ impl App {
             desc,
             date: None,
             run: String::new(),
+            main: String::new(),
             tier: "",
         };
         for step in RATING_STEPS {
@@ -1220,7 +1236,7 @@ impl App {
         for (i, a) in got.values().enumerate() {
             let _ = write!(
                 o,
-                "{}{{\"cat\":{},\"key\":{},\"icon\":{},\"title\":{},\"desc\":{},\"date\":{},\"run\":{},\"tier\":{},\"unlocked\":{}}}",
+                "{}{{\"cat\":{},\"key\":{},\"icon\":{},\"title\":{},\"desc\":{},\"date\":{},\"run\":{},\"main\":{},\"tier\":{},\"unlocked\":{}}}",
                 if i > 0 { "," } else { "" },
                 js(a.cat),
                 num(a.key),
@@ -1229,6 +1245,7 @@ impl App {
                 js(&a.desc),
                 a.date.map_or("null".into(), |d| d.to_string()),
                 js(&a.run),
+                js(&a.main),
                 js(a.tier),
                 a.date.is_some()
             );
@@ -1349,14 +1366,30 @@ impl App {
             let items: Vec<String> = list
                 .iter()
                 .map(|r| {
+                    let mut vs = r.vs.clone();
+                    vs.sort_by(|a, b| a.0.cmp(&b.0));
+                    let vs: Vec<String> = vs
+                        .iter()
+                        .map(|(n, w, d, l, a)| {
+                            format!(
+                                "{{\"name\":{},\"w\":{},\"d\":{},\"l\":{},\"anchor\":{}}}",
+                                js(n),
+                                w,
+                                d,
+                                l,
+                                a.map_or("null".into(), num)
+                            )
+                        })
+                        .collect();
                     format!(
-                        "{{\"name\":{},\"rating\":{},\"err\":{},\"games\":{},\"first_seen\":{},\"live\":{}}}",
+                        "{{\"name\":{},\"rating\":{},\"err\":{},\"games\":{},\"first_seen\":{},\"live\":{},\"vs\":[{}]}}",
                         js(&r.name),
                         num(r.rating),
                         num(r.err),
                         r.games,
                         r.first_seen,
-                        r.live
+                        r.live,
+                        vs.join(",")
                     )
                 })
                 .collect();

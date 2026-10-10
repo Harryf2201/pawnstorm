@@ -3,84 +3,183 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Pawnstorm Lab</title>
 <style>
+  /* Light by default; dark follows the OS, or the manual toggle (data-theme on <html>). */
   :root {
-    --bg: #0e1116; --panel: #161b22; --panel2: #1c222c; --border: #2a313c;
-    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
-    --good: #3fb950; --bad: #f85149; --warn: #d29922;
-    --sq-light: #e8dcc0; --sq-dark: #a7825a; --hl: rgba(255, 214, 10, .45);
+    color-scheme: light;
+    --bg: #f4f6f9; --panel: #ffffff; --panel2: #eef1f5; --border: #d3d9e0; --grid: #dde2e8;
+    --text: #1b2028; --muted: #5b6573; --accent: #0969da; --on-accent: #ffffff;
+    --good: #1a7f37; --bad: #cf222e; --warn: #9a6700; --gold: #b8860b;
+    --sq-light: #e8dcc0; --sq-dark: #a7825a; --hl: rgba(255, 214, 10, .5);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0e1116; --panel: #161b22; --panel2: #1c222c; --border: #2a313c; --grid: #2a313c;
+      --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --on-accent: #0b1220;
+      --good: #3fb950; --bad: #f85149; --warn: #d29922; --gold: #e3b341;
+      --hl: rgba(255, 214, 10, .45);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0e1116; --panel: #161b22; --panel2: #1c222c; --border: #2a313c; --grid: #2a313c;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --on-accent: #0b1220;
+    --good: #3fb950; --bad: #f85149; --warn: #d29922; --gold: #e3b341;
+    --hl: rgba(255, 214, 10, .45);
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
-  header { display: flex; align-items: center; gap: 24px; padding: 12px 24px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 5; }
-  .brand { font-weight: 700; font-size: 17px; letter-spacing: .3px; }
+  a { color: var(--accent); }
+  header { display: flex; align-items: center; gap: 20px; padding: 10px 24px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  .brand { font-weight: 700; font-size: 17px; letter-spacing: .3px; white-space: nowrap; }
   .brand span { color: var(--accent); }
-  #updated { margin-left: auto; color: var(--muted); font-size: 12px; }
+  .hright { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  #updated { color: var(--muted); font-size: 12px; }
   main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
-  h2 { font-size: 13px; margin: 36px 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .8px; }
-  .sub { color: var(--muted); }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
-  .pos { color: var(--good); } .neg { color: var(--bad); } .warnc { color: var(--warn); }
-  .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; font: inherit; font-weight: 600; cursor: pointer; }
-  .btn:hover { border-color: var(--accent); }
-  #labctl { display: flex; align-items: center; gap: 8px; }
-  #labctl .btn { padding: 5px 12px; }
-  .labstate { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: help; margin-right: 4px; }
+  h2 { font-size: 13px; margin: 32px 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .8px; }
+  h2:first-child { margin-top: 4px; }
   h2.sec { cursor: pointer; user-select: none; }
   h2.sec:hover { color: var(--text); }
   h2 .chev { display: inline-block; width: 16px; }
   h2 .secsum { text-transform: none; letter-spacing: 0; font-weight: 500; }
+  .lead { color: var(--muted); margin: -4px 0 14px; max-width: 70ch; }
+  .sub { color: var(--muted); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--border); background: var(--panel2); color: var(--muted); white-space: nowrap; }
+  .chip.best { color: var(--gold); border-color: var(--gold); background: color-mix(in srgb, var(--gold) 12%, transparent); }
+  .chip.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); background: color-mix(in srgb, var(--good) 10%, transparent); }
+  .chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+  .chip.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+  .chip.info { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .warnc { color: var(--warn); }
+  .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; font: inherit; font-weight: 600; cursor: pointer; min-height: 36px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.sm { padding: 4px 10px; min-height: 30px; font-size: 13px; }
+  .btn.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .labstate { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+  .help { color: var(--accent); cursor: pointer; font-size: 12px; user-select: none; }
+  .helptext { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .helptext b { color: var(--text); }
 
-  /* Rating hero */
-  .hero { display: grid; grid-template-columns: minmax(280px, 1fr) 2fr; gap: 16px; }
+  /* Tabs: top bar on wide screens, thumb-friendly bottom bar on phones */
+  nav#tabs { display: flex; gap: 4px; }
+  nav#tabs button { background: none; border: 0; color: var(--muted); font: inherit; padding: 7px 12px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  nav#tabs button:hover { color: var(--text); }
+  nav#tabs button.active { background: var(--panel2); color: var(--text); font-weight: 600; }
+  nav#tabs .ic { font-size: 15px; line-height: 1; }
+  .count { background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 700; }
+  .count.alert { background: var(--warn); color: #fff; }
+  .count:empty { display: none; }
+
+  /* Cards, panels */
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
-  .rating-label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .6px; }
-  .rating { font-size: 64px; font-weight: 800; line-height: 1.05; margin: 6px 0 2px; font-variant-numeric: tabular-nums; letter-spacing: -1px; }
-  .rating small { font-size: 22px; color: var(--muted); font-weight: 600; letter-spacing: 0; }
-  .delta { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .live-badge { display: inline-flex; align-items: center; gap: 6px; color: var(--good); font-size: 12px; font-weight: 600; background: rgba(63,185,80,.12); border: 1px solid rgba(63,185,80,.35); padding: 2px 10px; border-radius: 999px; }
-  .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
-  .fact .k { color: var(--muted); font-size: 12px; } .fact .v { font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; }
-  .chart svg { width: 100%; height: 300px; display: block; }
-  .chart.small svg { height: 200px; }
-
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
-  .dot.running { background: var(--good); box-shadow: 0 0 0 3px rgba(63,185,80,.2); animation: pulse 1.6s infinite; }
-  .dot.finished { background: var(--accent); } .dot.stopped { background: var(--muted); }
-  @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(63,185,80,0); } }
-
-  /* Tournament panels */
   .run { margin-bottom: 18px; }
-  .run h3 { margin: 0; font-size: 18px; display: flex; align-items: center; gap: 10px; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 14px; }
-  .card { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .run h3 { margin: 0; font-size: 18px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .run h4 { font-size: 12px; margin: 22px 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .6px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-top: 14px; }
+  .card { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+  .card.wide { grid-column: span 2; }
   .card .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
   .card .v { font-size: 24px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .card .d { color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .bar { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; margin-top: 10px; }
+  .bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 10px; }
   .bar > div { height: 100%; background: var(--accent); transition: width .5s; }
-  .llr { position: relative; height: 10px; margin-top: 12px; border-radius: 5px; background: linear-gradient(90deg, rgba(248,81,73,.35), var(--bg) 50%, rgba(63,185,80,.35)); }
-  .llr .m { position: absolute; top: -3px; width: 4px; height: 16px; border-radius: 2px; background: var(--text); transform: translateX(-2px); }
-  .run h4 { font-size: 12px; margin: 22px 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .6px; }
+  .bar.big { height: 10px; }
+  .llr { position: relative; height: 10px; margin-top: 12px; border-radius: 5px; background: linear-gradient(90deg, color-mix(in srgb, var(--bad) 40%, transparent), var(--panel) 50%, color-mix(in srgb, var(--good) 40%, transparent)); border: 1px solid var(--border); }
+  .llr .m { position: absolute; top: -4px; width: 4px; height: 16px; border-radius: 2px; background: var(--text); transform: translateX(-2px); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+  .dot.running { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); animation: pulse 1.6s infinite; }
+  .dot.finished { background: var(--accent); } .dot.stopped, .dot.idle { background: var(--muted); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 6px transparent; } }
 
+  /* Overview hero */
+  .hero { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr); gap: 16px; }
+  .rating-label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .6px; }
+  .vbig { font-size: 20px; font-weight: 700; margin-top: 6px; }
+  .rating { font-size: 64px; font-weight: 800; line-height: 1.05; margin: 2px 0 6px; font-variant-numeric: tabular-nums; letter-spacing: -1px; }
+  .rating small { font-size: 22px; color: var(--muted); font-weight: 600; letter-spacing: 0; }
+  .live-badge { display: inline-flex; align-items: center; gap: 6px; color: var(--good); font-size: 12px; font-weight: 600; background: color-mix(in srgb, var(--good) 12%, transparent); border: 1px solid color-mix(in srgb, var(--good) 35%, transparent); padding: 2px 10px; border-radius: 999px; }
+  .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+  .fact .k { color: var(--muted); font-size: 12px; } .fact .v { font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; }
+  .chart svg { width: 100%; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  svg .gl { stroke: var(--grid); } svg .ax { fill: var(--muted); font-size: 11px; } svg .axl { fill: var(--text); font-size: 12px; font-weight: 700; }
+
+  /* "Right now" */
+  .now-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .now-head h3 { margin: 0; font-size: 18px; flex: 1; min-width: 120px; }
+  .now-row { display: flex; align-items: flex-start; gap: 12px; padding: 11px 4px; border-top: 1px solid var(--border); cursor: pointer; border-radius: 6px; }
+  .now-row:first-of-type { border-top: 0; }
+  .now-row:hover { background: var(--panel2); }
+  .now-row .dot { margin-top: 6px; }
+  .now-ic { font-size: 18px; line-height: 1.3; width: 24px; text-align: center; flex: none; }
+  .now-main { flex: 1; min-width: 0; }
+  .now-t { font-weight: 600; overflow-wrap: anywhere; }
+  .now-d { color: var(--muted); font-size: 13px; }
+  .now-row.idle .now-t { color: var(--muted); font-weight: 500; }
+  .now-bar { width: 110px; flex: none; align-self: center; text-align: right; font-size: 12px; color: var(--muted); }
+  .now-bar .bar { margin-top: 4px; }
+  .alertbox { background: color-mix(in srgb, var(--warn) 10%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); color: var(--warn); border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-weight: 600; }
+  .warnbox { background: color-mix(in srgb, var(--warn) 10%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); color: var(--warn); border-radius: 10px; padding: 10px 14px; margin-top: 14px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+
+  /* Version cards */
+  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .toolbar .sub { margin-right: 4px; }
+  .vlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 14px; align-items: start; }
+  .vcard { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+  .vcard.is-best { border-color: var(--gold); background: linear-gradient(135deg, color-mix(in srgb, var(--gold) 9%, transparent), var(--panel) 55%); }
+  .vcard.is-worse { opacity: .92; }
+  .vtop { display: flex; justify-content: space-between; gap: 12px; cursor: pointer; }
+  .vtitle { font-size: 20px; font-weight: 800; }
+  .vchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .vrate { text-align: right; flex: none; }
+  .vrate b { font-size: 34px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.5px; }
+  .vrate small { display: block; color: var(--muted); font-size: 12px; }
+  .vdesc { margin-top: 8px; font-size: 13px; }
+  .level { margin-top: 6px; font-weight: 600; font-size: 13px; }
+  .scale { position: relative; height: 8px; background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; margin: 14px 0 4px; }
+  .scale .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; opacity: .85; }
+  .scale .err { position: absolute; top: 2px; height: 2px; background: var(--text); opacity: .55; transform: translateY(1px); }
+  .scale.best .fill { background: var(--gold); } .scale.worse .fill { background: var(--warn); } .scale.same .fill { background: var(--muted); }
+  .scale-l { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+  .vstats { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .vstats b { color: var(--text); }
+  .score { display: inline-flex; gap: 5px; align-items: baseline; padding: 1px 8px; border-radius: 6px; font-size: 12px; background: var(--panel2); border: 1px solid var(--border); white-space: nowrap; }
+  .score.good b { color: var(--good); } .score.bad b { color: var(--bad); }
+  .vach { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .vmore { color: var(--accent); font-size: 12px; margin-top: 10px; cursor: pointer; user-select: none; }
+
+  /* Tables */
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
   tr:last-child td { border-bottom: 0; }
   td.r, th.r { text-align: right; }
   .tbl { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
-  .runs-table tr.row { cursor: pointer; } .runs-table tr.row:hover td { background: var(--panel2); }
-  .runs-table td.detail { padding: 0 12px 16px; background: var(--panel); }
+
+  /* Tournaments list */
+  .trow { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px; }
+  .trow-top { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; }
+  .trow-top:hover { background: var(--panel2); border-radius: 12px; }
+  .trow-main { flex: 1; min-width: 0; }
+  .trow-main b { overflow-wrap: anywhere; }
+  .trow-res { text-align: right; flex: none; }
+  .trow-body { padding: 0 16px 16px; }
+  .chev2 { color: var(--muted); width: 14px; flex: none; }
 
   .games { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
   .game { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
   .player { display: flex; justify-content: space-between; align-items: center; font-size: 13px; padding: 4px 2px; gap: 8px; }
   .player .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
   .player .c { font-variant-numeric: tabular-nums; background: var(--bg); padding: 1px 6px; border-radius: 4px; }
-  .player.to .c { background: var(--accent); color: #0b1220; font-weight: 700; }
+  .player.to .c { background: var(--accent); color: var(--on-accent); font-weight: 700; }
   .bw { display: flex; gap: 6px; }
-  .evalbar { width: 10px; border-radius: 3px; overflow: hidden; background: #333; display: flex; flex-direction: column; }
+  .evalbar { width: 10px; border-radius: 3px; overflow: hidden; background: #333; display: flex; flex-direction: column; border: 1px solid var(--border); }
   .evalbar .b { background: #2b2b2b; transition: height .4s; } .evalbar .w { background: #f0f0f0; flex: 1; }
   .board { flex: 1; display: grid; grid-template-columns: repeat(8, 1fr); aspect-ratio: 1; border-radius: 4px; overflow: hidden; container-type: inline-size; }
   .sq { display: flex; align-items: center; justify-content: center; position: relative; }
@@ -92,47 +191,63 @@
   .ginfo { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 6px; font-variant-numeric: tabular-nums; }
   .ginfo b { color: var(--text); }
   .empty { color: var(--muted); padding: 28px; text-align: center; border: 1px dashed var(--border); border-radius: 10px; }
-  .warnbox { background: rgba(210,153,34,.1); border: 1px solid rgba(210,153,34,.4); color: var(--warn); border-radius: 10px; padding: 10px 14px; margin-top: 14px; }
   .res-w { color: var(--good); font-weight: 700; } .res-l { color: var(--bad); font-weight: 700; } .res-d { color: var(--muted); font-weight: 700; }
-  nav button { background: none; border: 0; color: var(--muted); font: inherit; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
-  nav button.active { background: var(--panel2); color: var(--text); }
-  .count { background: var(--accent); color: #0b1220; border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 700; margin-left: 4px; }
-  .count:empty { display: none; }
+
+  /* Achievements */
   .ach-list { display: flex; flex-direction: column; gap: 8px; }
-  .ach { display: flex; gap: 16px; align-items: center; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; }
+  .ach { display: flex; gap: 14px; align-items: center; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; }
   .ach .ic { font-size: 24px; line-height: 1; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--panel2); flex: none; }
   .ach .body { flex: 1; min-width: 0; }
-  .ach .t { font-weight: 700; font-size: 15px; } .ach .d { color: var(--muted); font-size: 13px; margin-top: 1px; }
-  .ach .w { color: var(--muted); font-size: 12px; text-align: right; flex: none; }
-  .ach.gold { border-color: rgba(227,179,65,.6); background: linear-gradient(135deg, rgba(227,179,65,.12), var(--panel) 60%); }
-  .ach.gold .ic { background: rgba(227,179,65,.18); }
-  .ach.silver { border-color: rgba(173,186,199,.45); } .ach.silver .ic { background: rgba(173,186,199,.12); }
-  .ach.bronze .ic { background: rgba(205,127,50,.15); }
-  .ach.locked { opacity: .45; } .ach.locked .ic { filter: grayscale(1); }
-  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; } .rating { font-size: 48px; } main { padding: 16px; } }
+  .ach .t { font-weight: 700; font-size: 15px; } .ach .d { color: var(--muted); font-size: 13px; margin-top: 1px; overflow-wrap: anywhere; }
+  .ach .w { color: var(--muted); font-size: 12px; text-align: right; flex: none; max-width: 40%; overflow-wrap: anywhere; }
+  .ach.gold { border-color: color-mix(in srgb, var(--gold) 60%, transparent); background: linear-gradient(135deg, color-mix(in srgb, var(--gold) 12%, transparent), var(--panel) 60%); }
+  .ach.gold .ic { background: color-mix(in srgb, var(--gold) 20%, transparent); }
+  .ach.silver { border-color: color-mix(in srgb, var(--muted) 55%, transparent); } .ach.silver .ic { background: color-mix(in srgb, var(--muted) 15%, transparent); }
+  .ach.bronze .ic { background: rgba(205,127,50,.18); }
+  .ach.locked .ic { filter: grayscale(1); opacity: .5; } .ach.locked .t { color: var(--muted); }
+  .ach.mini { padding: 8px 12px; } .ach.mini .ic { width: 34px; height: 34px; font-size: 19px; }
+  .ach .wmain { display: block; }
+
+  [data-toggle]:focus-visible, [data-go]:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { .dot.running { animation: none; } .bar > div { transition: none; } }
+
+  /* Phones */
+  @media (max-width: 860px) {
+    .btn.sm { min-height: 40px; }
+    th, td { padding: 7px 8px; }
+    .hero, .two { grid-template-columns: minmax(0, 1fr); }
+    .rating { font-size: 52px; }
+    main { padding: 16px 14px 96px; }
+    header { padding: 8px 14px; gap: 10px; }
+    #updated { display: none; }
+    nav#tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--panel); border-top: 1px solid var(--border); padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); gap: 2px; }
+    nav#tabs button { flex: 1; flex-direction: column; gap: 1px; padding: 6px 2px; font-size: 11px; min-width: 0; position: relative; }
+    nav#tabs .ic { font-size: 20px; }
+    nav#tabs .count { position: absolute; top: 0; right: calc(50% - 22px); font-size: 10px; padding: 0 5px; }
+    .vlist { grid-template-columns: minmax(0, 1fr); }
+    .card.wide { grid-column: 1 / -1; }
+    .cards { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+    .card .v { font-size: 21px; }
+    .now-bar { width: 70px; }
+    .ach { flex-wrap: wrap; row-gap: 6px; }
+    .ach .w { flex-basis: 100%; max-width: none; text-align: left; padding-left: 56px; }
+    .ach.mini .w { padding-left: 48px; }
+    .ach .wmain { display: inline; margin-left: 8px; }
+    .vrate b { font-size: 28px; }
+  }
 </style>
 </head>
 <body>
 <header>
   <div class="brand">♞ Pawnstorm <span>Lab</span></div>
-  <nav>
-    <button data-tab="dash" class="active">Dashboard</button>
-    <button data-tab="ach">Achievements <span id="ach-count" class="count"></span></button>
-  </nav>
-  <div id="updated"></div>
-  <div id="labctl"></div>
-</header>
-<main>
-  <div id="dash">
-    <section id="rating"></section>
-    <section id="health"></section>
-    <section id="datagen"></section>
-    <section id="training"></section>
-    <section id="ongoing"></section>
-    <section id="finished"></section>
+  <nav id="tabs"></nav>
+  <div class="hright">
+    <span id="updated"></span>
+    <span id="labstate"></span>
+    <button id="theme" class="btn sm" title="Switch between automatic, light and dark theme">◐</button>
   </div>
-  <section id="ach" hidden></section>
-</main>
+</header>
+<main><div id="view"></div></main>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -142,46 +257,64 @@ const fmtElo = (e, err) => e == null ? '–' : `${e > 0 ? '+' : ''}${e.toFixed(1
 const dur = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`; };
 const clock = ms => { const s = Math.max(0, ms) / 1000; return s >= 60 ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : s.toFixed(1); };
 const when = t => { const d = new Date(t * 1000); return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }); };
+const big = n => n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
+const pct = (w, d, n) => n ? 100 * (w + d / 2) / n : null;
 
-let runs = [], details = {}, expanded = new Set(), ach = null, tab = 'dash';
+// ---- UI state (remembered between visits) ----
+const TABS = [['overview', 'Overview', '🏠'], ['versions', 'Versions', '📈'], ['tournaments', 'Tournaments', '⚔️'], ['achievements', 'Achievements', '🏆'], ['lab', 'Lab', '🔧']];
+const ui = { state: {}, sort: 'new', group: 'cat', theme: 'auto' };
+try { const s = JSON.parse(localStorage.getItem('pawn-ui') || '{}'); Object.assign(ui, s); } catch (e) {}
+const saveUi = () => { try { localStorage.setItem('pawn-ui', JSON.stringify({ state: ui.state, sort: ui.sort, group: ui.group, theme: ui.theme })); } catch (e) {} };
+const isOpen = (k, def = false) => k in ui.state ? ui.state[k] : def;
+let tab = TABS.some(t => t[0] === location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
 
-document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
-  tab = b.dataset.tab;
-  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
-  $('#dash').hidden = tab !== 'dash';
-  $('#ach').hidden = tab !== 'ach';
-  render();
+function applyTheme() {
+  if (ui.theme === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = ui.theme;
+  $('#theme').textContent = { auto: '◐', light: '☀', dark: '☾' }[ui.theme];
+  $('#theme').title = `Theme: ${ui.theme} (click to change)`;
+}
+$('#theme').onclick = () => { ui.theme = { auto: 'light', light: 'dark', dark: 'auto' }[ui.theme] || 'auto'; saveUi(); applyTheme(); render(); };
+applyTheme();
+
+function setHtml(el, html) {
+  if (el._h === html) return;
+  el.innerHTML = html; el._h = html;
+  // Make the clickable rows usable from the keyboard / by screen readers.
+  el.querySelectorAll('[data-toggle],[data-go]').forEach(n => {
+    if (!n.matches('button')) { n.tabIndex = 0; n.setAttribute('role', 'button'); }
+    if (n.dataset.toggle) n.setAttribute('aria-expanded', String(isOpen(n.dataset.toggle, n.dataset.def === '1')));
+  });
+}
+const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+function goTab(t, openRun) {
+  if (openRun) { ui.state['run:' + openRun] = true; saveUi(); }
+  if (location.hash.slice(1) !== t) location.hash = t; else render();
+  window.scrollTo(0, 0);
+  if (openRun) poll();
+}
+window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (TABS.some(x => x[0] === t)) { tab = t; render(); window.scrollTo(0, 0); } });
+window.addEventListener('resize', () => { clearTimeout(window._rz); window._rz = setTimeout(render, 150); });
+
+document.addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[role="button"]')) { e.preventDefault(); e.target.click(); }
 });
 
-const CATEGORIES = [
-  ['rating', 'Rating milestones'],
-  ['wins', 'First wins'],
-  ['matches', 'Match victories'],
-  ['sprt', 'Proven improvements'],
-  ['games', 'Games played'],
-];
+// One click handler for everything interactive (the page re-renders every couple of seconds).
+document.addEventListener('click', e => {
+  if (e.target.closest('a')) return;
+  const t = e.target.closest('[data-toggle],[data-go],[data-act],[data-set]');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.toggle) {
+    ui.state[d.toggle] = !isOpen(d.toggle, d.def === '1'); saveUi(); render();
+    if (d.toggle.startsWith('run:')) poll();
+  } else if (d.go) goTab(d.go, d.run);
+  else if (d.set) { const [k, v] = d.set.split(':'); ui[k] = v; saveUi(); render(); }
+  else if (d.act) doAction(d.act);
+});
 
-function renderAchievements() {
-  if (!ach) return '<div class="empty">Loading…</div>';
-  const total = ach.items.length, done = ach.items.filter(a => a.unlocked).length;
-  const row = a => `<div class="ach ${a.unlocked ? a.tier : 'locked'}"><div class="ic">${a.icon}</div>
-    <div class="body"><div class="t">${esc(a.title)}</div><div class="d">${esc(a.desc)}</div></div>
-    <div class="w">${a.unlocked ? `<span class="pos">✓ ${when(a.date)}</span><br>${esc(a.run)}` : '🔒 not yet'}</div></div>`;
-  return `<div class="panel" style="display:flex;align-items:center;gap:20px;margin-top:8px">
-      <div><div class="rating-label">Achievements</div><div class="rating" style="font-size:44px">${done}<small> / ${total}</small></div></div>
-      <div style="flex:1"><div class="bar" style="height:10px"><div style="width:${100 * done / Math.max(1, total)}%"></div></div></div>
-    </div>` +
-    CATEGORIES.map(([cat, label]) => {
-      const items = ach.items.filter(a => a.cat === cat).sort((a, b) => a.key - b.key);
-      if (!items.length) return '';
-      const n = items.filter(a => a.unlocked).length;
-      return `<h2>${label} <span class="sub" style="text-transform:none;letter-spacing:0">· ${n} of ${items.length}</span></h2><div class="ach-list">${items.map(row).join('')}</div>`;
-    }).join('');
-}
-
-let gens = [], genRate = {};
-
-const big = n => n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
+// ---- Data ----
+let runs = [], details = {}, ach = null, ratings = [], gens = [], trains = [], health = null, lab = null, schedule = null, genRate = {};
 
 /// Recent speed, measured between polls (falls back to the average since start).
 function trackRate(g) {
@@ -193,420 +326,391 @@ function trackRate(g) {
   if (!prev || t > prev.t) genRate[g.name] = { t, positions: g.positions, rate: g.rate };
 }
 
-function renderCloud(g) {
-  if (g.state === 'queued') {
-    return `<div class="panel run"><h3><span class="dot stopped"></span>Cloud batch ${esc(g.run_id)} <span class="pill">GitHub Actions</span> <span class="pill">queued</span></h3>
-      <div class="sub" style="margin-top:4px">Waiting for the current batch to finish (only one batch runs at a time) · <a href="${esc(g.url)}" target="_blank" style="color:var(--accent)">view on GitHub</a></div></div>`;
-  }
-  const running = g.state === 'running';
-  const total = g.jobs_total || 0, got = g.jobs_downloaded || 0;
-  const elapsed = (running ? g.now : g.updated) - g.started;
-  const planned = (g.minutes || 330) * 60 + 300;
-  const pct = running ? Math.min(99, 100 * elapsed / planned) : 100;
-  const perJob = got ? g.positions / got : null;
-  const projected = perJob ? perJob * total : null;
-  const rate = perJob ? perJob * total / ((g.minutes || 330) * 60) : null;
-  const state = running ? 'running' : 'finished';
-  return `<div class="panel run">
-    <h3><span class="dot ${state}"></span>Cloud batch ${esc(g.run_id)} <span class="pill">GitHub Actions</span> <span class="pill">${state}</span></h3>
-    <div class="sub" style="margin-top:4px">${total} jobs × ${g.minutes || 330} min · ${esc(g.cpu || 'cloud runners')} · <a href="${esc(g.url)}" target="_blank" style="color:var(--accent)">view on GitHub</a></div>
-    ${g.warning ? `<div class="warnbox">⚠ ${esc(g.warning)}</div>` : ''}
-    <div class="cards">
-      <div class="card" style="grid-column: span 2"><div class="k">Batch progress</div>
-        <div class="v">${running ? dur(Math.max(0, planned - elapsed)) + '<span class="sub" style="font-size:.55em"> left</span>' : 'done'}</div>
-        <div class="d">${g.jobs_running || 0} running · ${g.jobs_queued || 0} queued · ${g.jobs_done || 0} finished${g.jobs_failed ? ` · <span class="neg">${g.jobs_failed} failed</span>` : ''}</div>
-        <div class="bar" style="height:10px"><div style="width:${pct}%"></div></div></div>
-      <div class="card"><div class="k">Positions downloaded</div><div class="v">${big(g.positions || 0)}</div>
-        <div class="d">${got}/${total} jobs' data on this PC</div></div>
-      <div class="card"><div class="k">Expected from batch</div><div class="v">${projected ? '~' + big(Math.round(projected)) : '–'}</div>
-        <div class="d">${rate ? '≈ ' + big(Math.round(rate)) + ' pos/s · ' + big(Math.round(rate * 3600)) + '/hour' : 'known once the first job finishes'}</div></div>
-      <div class="card"><div class="k">Data on disk</div><div class="v">${(g.bytes / 1e9).toFixed(2)}<span class="sub" style="font-size:.55em"> GB</span></div><div class="d">gzipped text</div></div>
-    </div></div>`;
+// Engine names: "Pawnstorm-0.1" and "pawnstorm-v0.1" are the same version.
+const canon = n => String(n).replace(/^pawnstorm[-_ ]?v?(\d)/i, 'pawnstorm-v$1');
+const short = n => canon(n).replace(/^pawnstorm-/i, '');
+const vkey = n => String(n).toLowerCase().replace(/[^a-z0-9.]/g, '').replace(/(\D)v(\d)/, '$1$2');
+const KNOWN = { '0.1': 'Hand-written evaluation (no neural network)', '0.2': 'First neural network' };
+function describe(p) {
+  const s = short(p.raw), bits = [];
+  const v = (s.match(/^v(\d+\.\d+)/) || [])[1];
+  if (v && KNOWN[v]) bits.push(KNOWN[v]);
+  const m = s.match(/(\d+)m\b/i); if (m) bits.push(`trained on ${m[1]}M positions`);
+  const x = s.match(/(\d{3,4})x(\d+)/); if (x) bits.push(`${x[1]}-neuron net, ${x[2]} output buckets`);
+  if (/long/i.test(s)) bits.push('longer training');
+  return bits.join(' · ') || 'Engine version';
 }
 
-function renderDatagen() {
-  if (!gens.length) return '';
-  const stopped = gens.find(g => g.cloud_stopped);
-  return `<h2>Data generation</h2>` + (stopped ? `<div class="warnbox" style="margin-bottom:12px">⛔ Cloud generation stopped because GitHub reported: ${esc(stopped.cloud_stopped)}</div>` : '') + gens.map(g => {
-    if (g.source === 'cloud') return renderCloud(g);
-    const running = g.state === 'running' && g.now - g.updated < 15;
-    const state = g.state === 'finished' ? 'finished' : running ? 'running' : 'stopped';
-    const pct = Math.min(100, 100 * g.positions / g.target);
-    const left = running && g.rate > 0 ? dur((g.target - g.positions) / g.rate) : null;
-    const wdl = g.white_wins + g.draws + g.black_wins || 1;
-    const nps = g.nodes / Math.max(1, g.updated - g.started);
-    return `<div class="panel run">
-      <h3><span class="dot ${state}"></span>Self-play: ${esc(g.name)} <span class="pill">${state}</span></h3>
-      <div class="sub" style="margin-top:4px">${g.threads} CPU threads · ${big(g.soft_nodes)} nodes per move · running for ${dur((running ? g.now : g.updated) - g.started)}</div>
-      <div class="cards">
-        <div class="card" style="grid-column: span 2"><div class="k">Training positions</div>
-          <div class="v">${big(g.positions)} <span class="sub" style="font-size:.55em">/ ${big(g.target)} · ${pct.toFixed(1)}%</span></div>
-          <div class="d">${left ? '~' + left + ' left' : state}</div><div class="bar" style="height:10px"><div style="width:${pct}%"></div></div></div>
-        <div class="card"><div class="k">Speed</div><div class="v">${big(Math.round(g.rate || 0))}<span class="sub" style="font-size:.55em"> pos/s</span></div><div class="d">${big(Math.round(nps))} nodes/s searched</div></div>
-        <div class="card"><div class="k">Games played</div><div class="v">${big(g.games)}</div><div class="d">avg ${(g.plies / Math.max(1, g.games)).toFixed(0)} plies · ${(g.positions / Math.max(1, g.games)).toFixed(0)} kept per game</div></div>
-        <div class="card"><div class="k">Results</div><div class="v" style="font-size:18px;margin-top:6px">
-          <span>${(100 * g.white_wins / wdl).toFixed(0)}%</span> / <span class="sub">${(100 * g.draws / wdl).toFixed(0)}%</span> / <span>${(100 * g.black_wins / wdl).toFixed(0)}%</span></div>
-          <div class="d">white wins / draws / black wins</div></div>
-        <div class="card"><div class="k">Data on disk</div><div class="v">${(g.bytes / 1e9).toFixed(2)}<span class="sub" style="font-size:.55em"> GB</span></div><div class="d">text, converted for training later</div></div>
-      </div></div>`;
-  }).join('');
+/// Everything about the engine versions, derived from the server's joint rating fit.
+function versionModel() {
+  const pts = ratings.filter(r => /^pawnstorm/i.test(r.name)).map(r => ({
+    key: vkey(r.name), raw: r.name, name: canon(r.name), short: short(r.name), perf: r.rating, err: r.err,
+    games: r.games, first: r.first_seen, live: r.live, vs: (r.vs || []).map(o => ({ ...o, name: canon(o.name), n: o.w + o.d + o.l })),
+  })).sort((a, b) => a.first - b.first);
+  // Headline = strongest version. Versions with too few games (huge error margin) don't qualify,
+  // so a lucky early result from an experiment can't replace it.
+  const solid = pts.filter(p => p.err <= 100);
+  const pool = solid.length ? solid : pts;
+  const strongest = pool.reduce((b, p) => !b || p.perf > b.perf ? p : b, null);
+  let prevBest = null;
+  pts.forEach((p, i) => {
+    p.index = i; p.prev = prevBest;
+    p.gain = prevBest ? p.perf - prevBest.perf : null;
+    const margin = prevBest ? Math.hypot(p.err, prevBest.err) : 0;
+    p.verdict = !prevBest ? 'first' : p.gain > margin ? 'better' : p.gain < -margin ? 'worse' : 'same';
+    p.strongest = p === strongest;
+    p.provisional = p.err > 100;
+    if (!prevBest || p.perf > prevBest.perf) prevBest = p;
+    p.best = prevBest; // best version so far, as of this one
+  });
+  return { pts, strongest };
 }
 
-let trains = [], health = null;
-
-// Actions are POSTs with a custom header, which other websites can't send to this server.
-const act = url => fetch(url, { method: 'POST', headers: { 'X-Lab': '1' } }).catch(() => {});
-
-async function control(mode) {
-  if (mode === 'pause' && !confirm('Pause data generation, GPU training and tournaments now?\n(Tournament games in progress may be lost on time.)')) return;
-  await act('/api/control/' + mode);
-  setTimeout(poll, 800);
+/// "Beats SF-2900, loses to SF-3100", from results against fixed-strength Stockfish.
+function levelText(p) {
+  const sf = p.vs.filter(o => o.anchor != null && o.n >= 10).sort((a, b) => a.anchor - b.anchor);
+  // How many standard errors the score is from 50%: a small sample above 50% is not "beating" anyone.
+  const z = o => (pct(o.w, o.d, o.n) / 100 - 0.5) / (0.5 / Math.sqrt(o.n));
+  const beat = sf.filter(o => z(o) >= 1).pop();
+  const lose = sf.filter(o => z(o) <= -1 && (!beat || o.anchor > beat.anchor))[0];
+  const level = sf.filter(o => Math.abs(z(o)) < 1 && (!beat || o.anchor > beat.anchor) && (!lose || o.anchor < lose.anchor)).pop();
+  const bits = [];
+  if (beat) bits.push(`Beats ${esc(beat.name)}`);
+  if (level) bits.push(`${bits.length ? 'level with' : 'Level with'} ${esc(level.name)}`);
+  if (lose) bits.push(`${bits.length ? 'loses to' : 'Loses to'} ${esc(lose.name)}`);
+  return bits.join(' · ') || 'Not enough games against Stockfish yet';
 }
 
-let lab = null;
-
-async function labAction(what) {
-  let cloud = false;
-  if (what === 'stop') {
-    if (!confirm('Stop the lab?\n\nData generation pauses (it resumes where it left off), any tournament in progress is cut short (finished games are kept), and the watchdog, cloud sync and auto-training stop. The dashboard stays open.')) return;
-    cloud = confirm('Also start a cloud batch on GitHub so data keeps coming in while the PC is off?\n\nOK = yes, Cancel = no');
-  }
-  await act(`/api/lab/${what}${cloud ? '?cloud=1' : ''}`);
-  setTimeout(poll, 500);
+const VERDICT = {
+  first: ['', 'First version'],
+  better: ['good', '↑ Improved'],
+  same: ['', '≈ About the same'],
+  worse: ['warn', '↓ Weaker (experiment)'],
+};
+function chips(p) {
+  let h = '';
+  if (p.strongest) h += `<span class="chip best">★ Strongest</span>`;
+  const [c, t] = VERDICT[p.verdict];
+  if (!(p.strongest && p.verdict === 'first')) h += `<span class="chip ${c}">${t}</span>`;
+  if (p.live) h += `<span class="chip info"><span class="dot running"></span>Being tested now</span>`;
+  else if (p.provisional) h += `<span class="chip">Few games so far</span>`;
+  return h;
 }
 
-function renderLab() {
-  if (!lab) return '';
-  const parts = [['datagen', 'Data generation'], ['watchdog', 'Watchdog'], ['cloud_sync', 'Cloud sync'], ['auto_train', 'Auto-training']];
-  const on = parts.filter(([k]) => lab[k]).length;
-  const tip = parts.map(([k, n]) => `${lab[k] ? '●' : '○'} ${n}`).join('\n') + (lab.log.length ? '\n\nLast action:\n' + lab.log.join('\n') : '');
-  let label, dot, btns = '';
-  if (lab.busy) {
-    label = lab.busy === 'start' ? 'Starting…' : 'Stopping…'; dot = 'running';
-  } else if (on === parts.length) {
-    label = 'Lab running'; dot = 'running';
-  } else if (on === 0) {
-    label = 'Lab stopped'; dot = 'stopped';
-  } else {
-    label = `Lab partly running (${on}/${parts.length})`; dot = 'finished';
-  }
-  if (!lab.busy) {
-    if (on < parts.length) btns += `<button class="btn" onclick="labAction('start')">▶ Start lab</button>`;
-    if (on > 0) btns += `<button class="btn" onclick="labAction('stop')">■ Stop lab</button>`;
-  }
-  return `<span class="labstate" title="${esc(tip)}"><span class="dot ${dot}"></span>${label}</span>${btns}`;
+function achByVersion() {
+  const m = {};
+  (ach?.items || []).filter(a => a.unlocked && a.main).forEach(a => (m[vkey(a.main)] ||= []).push(a));
+  return m;
 }
 
-function renderHealth() {
-  const h = health;
-  if (!h || !h.updated) return `<h2>System health</h2><div class="warnbox">The watchdog isn't running, so temperatures aren't being monitored.</div>`;
-  const stale = h.now - h.updated > 30;
-  const lim = k => (String(h['limit_' + k] || '').split(',').map(Number));
-  const tile = (label, v, unit, key, sub, low) => {
-    let c = '';
-    if (v != null && v !== '' && key) {
-      const [w, cr] = lim(key);
-      const bad = low ? v <= cr : v >= cr, warn = low ? v <= w : v >= w;
-      c = bad ? 'neg' : warn ? 'warnc' : 'pos';
+// ---- Charts (sized to the real pixel width so text stays readable on phones) ----
+const viewW = () => Math.max(300, Math.min($('#view').clientWidth || 360, 1280));
+
+function ratingChart(pts, W) {
+  const H = 280, L = 46, R = 14, T = 18, B = 42;
+  const lo = Math.min(...pts.map(p => p.perf - p.err)), hi = Math.max(...pts.map(p => p.perf + p.err));
+  const pad = Math.max(40, (hi - lo) * 0.12);
+  const y0 = Math.floor((lo - pad) / 50) * 50, y1 = Math.ceil((hi + pad) / 50) * 50;
+  const n = pts.length;
+  const X = i => n === 1 ? (L + W - R) / 2 : L + 16 + i / (n - 1) * (W - L - R - 32);
+  const Y = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}">`;
+  const step = Math.max(50, Math.ceil((y1 - y0) / 5 / 50) * 50);
+  for (let v = y0; v <= y1; v += step) s += `<line class="gl" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${L - 8}" y="${Y(v) + 4}" text-anchor="end">${v}</text>`;
+  // The line is the best version so far: experiments that don't beat it appear as dots below it.
+  s += `<polyline points="${pts.map((p, i) => `${X(i)},${Y(p.best.perf)}`).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-opacity=".8"/>`;
+  // Label a point only if there is room: the strongest and the newest always get one, others fill the gaps.
+  const gap = 44, shown = new Set(), xs = pts.map((_, i) => X(i));
+  const fits = i => [...shown].every(j => Math.abs(xs[i] - xs[j]) >= gap);
+  pts.forEach((p, i) => { if (p.strongest) shown.add(i); });
+  if (!shown.has(n - 1) && fits(n - 1)) shown.add(n - 1);
+  for (let i = 0; i < n; i++) if (!shown.has(i) && fits(i)) shown.add(i);
+  const every = Math.max(1, Math.ceil(gap / Math.max(1, (W - L - R - 32) / Math.max(1, n - 1))));
+  const COL = { first: 'var(--accent)', better: 'var(--accent)', same: 'var(--muted)', worse: 'var(--warn)' };
+  pts.forEach((p, i) => {
+    const x = X(i), col = p.strongest ? 'var(--gold)' : COL[p.verdict];
+    s += `<line x1="${x}" x2="${x}" y1="${Y(p.perf - p.err)}" y2="${Y(p.perf + p.err)}" stroke="${col}" stroke-opacity=".5" stroke-width="2"/>`;
+    s += `<line x1="${x - 4}" x2="${x + 4}" y1="${Y(p.perf - p.err)}" y2="${Y(p.perf - p.err)}" stroke="${col}" stroke-opacity=".5"/><line x1="${x - 4}" x2="${x + 4}" y1="${Y(p.perf + p.err)}" y2="${Y(p.perf + p.err)}" stroke="${col}" stroke-opacity=".5"/>`;
+    if (p.live) s += `<circle cx="${x}" cy="${Y(p.perf)}" r="${reduceMotion ? 10 : 6}" fill="none" stroke="var(--good)" stroke-width="2">${reduceMotion ? '' : '<animate attributeName="r" values="6;14;6" dur="1.6s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values="1;0;1" dur="1.6s" repeatCount="indefinite"/>'}</circle>`;
+    // Experiments that didn't beat the best version so far are hollow rings, so they can't be mistaken for progress.
+    const hollow = p.verdict === 'worse' && !p.strongest;
+    s += `<circle cx="${x}" cy="${Y(p.perf)}" r="${p.strongest ? 7 : 5.5}" fill="${hollow ? 'var(--panel)' : col}" stroke="${hollow ? col : 'var(--panel)'}" stroke-width="${hollow ? 2.5 : 2}"><title>${esc(p.short)}: ${p.perf.toFixed(0)} ±${p.err.toFixed(0)} (${p.games} games)</title></circle>`;
+    if (shown.has(i)) {
+      s += `<text class="axl" x="${x}" y="${Y(p.perf + p.err) - 6}" text-anchor="middle">${p.perf.toFixed(0)}</text>`;
+      const room = Math.max(5, Math.floor((W - L - R - 32) / Math.max(1, n - 1) * every / 6.4));
+      const label = p.short.length > room ? p.short.slice(0, room - 1) + '…' : p.short;
+      s += `<text class="ax" x="${x}" y="${H - 22}" text-anchor="middle">${esc(label)}</text>`;
+      if (p.first) s += `<text class="ax" x="${x}" y="${H - 8}" text-anchor="middle" style="font-size:10px">${new Date(p.first * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</text>`;
     }
-    return `<div class="card"><div class="k">${label}</div><div class="v ${c}">${v == null || v === '' ? '–' : v}<span class="sub" style="font-size:.55em">${unit}</span></div><div class="d">${sub}</div></div>`;
-  };
-  const states = {
-    ok: ['pos', '✓ All good: everything within safe limits'],
-    warn: ['warnc', '⚠ Data generation paused: ' + h.reason],
-    critical: ['neg', '⛔ Everything paused: ' + h.reason],
-    manual: ['warnc', '⏸ Everything paused by you'],
-  };
-  const [sc, st] = stale ? ['neg', 'Watchdog stopped responding'] : states[h.level] || ['', h.level];
-  const lims = k => { const [w, c] = lim(k); return `pause at ${w} · stop all at ${c}`; };
-  const paused = h.level === 'manual' || h.level === 'warn' || h.level === 'critical';
-  let html = `<h2>System health</h2><div class="panel run">
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <div class="${sc}" style="font-weight:700;font-size:15px;flex:1">${esc(st)}</div>
-      ${paused ? `<button class="btn" onclick="control('resume')">▶ Resume</button>` : `<button class="btn" onclick="control('pause')">⏸ Pause everything</button>`}
-    </div>
-    ${h.warn_now && h.level === 'ok' ? `<div class="sub" style="margin-top:6px">Watching: ${esc(h.warn_now)}</div>` : ''}
-    <div class="cards">
-      ${tile('CPU temperature', h.cpu_temp, '°C', 'cpu_temp', `${h.cpu_power ?? '–'} W · ${h.cpu_load ?? '–'}% load · ${lims('cpu_temp')}`)}
-      ${tile('GPU temperature', h.gpu_temp, '°C', 'gpu_temp', `${h.gpu_power ?? '–'} W · ${h.gpu_load ?? '–'}% load · ${lims('gpu_temp')}`)}
-      ${tile('GPU memory', h.gpu_mem_temp, '°C', 'gpu_mem_temp', `${h.gpu_mem_used_gb ?? '–'} GB VRAM in use`)}
-      ${tile('SSD temperature', h.ssd_temp, '°C', 'ssd_temp', lims('ssd_temp'))}
-      ${tile('Free RAM', h.ram_free_gb, ' GB', 'ram_free_gb', `of ${h.ram_total_gb} GB`, true)}
-      ${tile('Free disk (C:)', h.disk_free_gb, ' GB', 'disk_free_gb', 'data + checkpoints live here', true)}
-    </div>`;
-  if (h.history.length > 2) html += `<h4>Temperatures, last hour</h4><div class="chart small">${tempChart(h.history)}</div>`;
-  if (h.events.length) html += `<h4>Watchdog log</h4><div class="tbl" style="padding:6px 12px;font-size:12px;font-family:Consolas,monospace;line-height:1.7">${h.events.map(e => `<div class="${/CRITICAL/.test(e) ? 'neg' : /WARNING|pause/.test(e) ? 'warnc' : 'sub'}">${esc(e)}</div>`).join('')}</div>`;
-  return html + '</div>';
-}
-
-function tempChart(rows) {
-  const W = 800, H = 160, L = 40, R = 12, T = 10, B = 20;
-  const t0 = rows[0][0], t1 = Math.max(rows[rows.length - 1][0], t0 + 1);
-  const X = t => L + (t - t0) / (t1 - t0) * (W - L - R), Y = v => T + (1 - (v - 20) / (105 - 20)) * (H - T - B);
-  let s = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:160px">`;
-  for (const v of [40, 60, 80, 100]) s += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="#2a313c"/><text x="${L - 6}" y="${Y(v) + 4}" fill="#8b949e" font-size="11" text-anchor="end">${v}°</text>`;
-  const lim = Number(String(health.limit_cpu_temp || '92').split(',')[0]);
-  s += `<line x1="${L}" x2="${W - R}" y1="${Y(lim)}" y2="${Y(lim)}" stroke="#f85149" stroke-dasharray="5 4" stroke-opacity=".7"/><text x="${W - R}" y="${Y(lim) - 4}" fill="#f85149" font-size="10" text-anchor="end">pause line</text>`;
-  const line = (i, color) => { const pts = rows.filter(r => r[i] != null).map(r => `${X(r[0])},${Y(r[i])}`); return pts.length ? `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>` : ''; };
-  s += line(1, '#58a6ff') + line(2, '#3fb950') + line(5, '#d29922');
-  s += `<text x="${L + 4}" y="${H - 4}" font-size="11"><tspan fill="#58a6ff">■ CPU</tspan>  <tspan fill="#3fb950">■ GPU</tspan>  <tspan fill="#d29922">■ SSD</tspan></text>`;
+  });
   return s + '</svg>';
 }
 
-function lossChart(losses) {
-  const W = 800, H = 160, L = 64, R = 12, T = 10, B = 22;
+function tempChart(rows, W) {
+  const H = 160, L = 40, R = 12, T = 10, B = 20;
+  const t0 = rows[0][0], t1 = Math.max(rows[rows.length - 1][0], t0 + 1);
+  const X = t => L + (t - t0) / (t1 - t0) * (W - L - R), Y = v => T + (1 - (v - 20) / (105 - 20)) * (H - T - B);
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}">`;
+  for (const v of [40, 60, 80, 100]) s += `<line class="gl" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${v}°</text>`;
+  const lim = Number(String(health.limit_cpu_temp || '92').split(',')[0]);
+  s += `<line x1="${L}" x2="${W - R}" y1="${Y(lim)}" y2="${Y(lim)}" stroke="var(--bad)" stroke-dasharray="5 4" stroke-opacity=".7"/><text x="${W - R}" y="${Y(lim) - 4}" fill="var(--bad)" font-size="10" text-anchor="end">pause line</text>`;
+  const line = (i, color) => { const pts = rows.filter(r => r[i] != null).map(r => `${X(r[0])},${Y(r[i])}`); return pts.length ? `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="2"/>` : ''; };
+  s += line(1, 'var(--accent)') + line(2, 'var(--good)') + line(5, 'var(--warn)');
+  s += `<text x="${L + 4}" y="${H - 4}" font-size="11"><tspan fill="var(--accent)">■ CPU</tspan>  <tspan fill="var(--good)">■ GPU</tspan>  <tspan fill="var(--warn)">■ SSD</tspan></text>`;
+  return s + '</svg>';
+}
+
+function lossChart(losses, W) {
+  const H = 160, L = 64, R = 12, T = 10, B = 22;
   const ys = losses.map(l => l[1]);
   let y0 = Math.min(...ys), y1 = Math.max(...ys); const pad = (y1 - y0) * 0.1 || y1 * 0.05; y0 -= pad; y1 += pad;
   const x0 = losses[0][0], x1 = Math.max(losses[losses.length - 1][0], x0 + 1);
   const X = v => L + (v - x0) / (x1 - x0) * (W - L - R), Y = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-  let s = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:160px">`;
-  for (let i = 0; i <= 3; i++) { const v = y0 + (y1 - y0) * i / 3; s += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="#2a313c"/><text x="${L - 6}" y="${Y(v) + 4}" fill="#8b949e" font-size="11" text-anchor="end">${v.toFixed(5)}</text>`; }
-  s += `<polyline points="${losses.map(l => `${X(l[0])},${Y(l[1])}`).join(' ')}" fill="none" stroke="#d29922" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
-  if (losses.length < 60) losses.forEach(l => s += `<circle cx="${X(l[0])}" cy="${Y(l[1])}" r="3" fill="#d29922"/>`);
-  return s + `<text x="${W - R}" y="${H - 4}" fill="#8b949e" font-size="11" text-anchor="end">training round (superbatch) →</text></svg>`;
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}">`;
+  for (let i = 0; i <= 3; i++) { const v = y0 + (y1 - y0) * i / 3; s += `<line class="gl" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${v.toFixed(5)}</text>`; }
+  s += `<polyline points="${losses.map(l => `${X(l[0])},${Y(l[1])}`).join(' ')}" fill="none" stroke="var(--warn)" stroke-width="2"/>`;
+  if (losses.length < 60) losses.forEach(l => s += `<circle cx="${X(l[0])}" cy="${Y(l[1])}" r="3" fill="var(--warn)"/>`);
+  return s + `<text class="ax" x="${W - R}" y="${H - 4}" text-anchor="end">training round →</text></svg>`;
 }
 
-let schedule = null;
-
-function renderSchedule() {
-  const s = schedule;
-  if (!s || !s.status) return '';
-  const pos = Number(s.positions || 0), next = Number(s.next_milestone || 0);
-  const done = (s.done || '').split(',').filter(Boolean).map(Number);
-  const prev = done.length ? Math.max(...done.filter(d => d <= pos), 0) : 0;
-  const pct = next ? Math.min(100, 100 * (pos - prev) / Math.max(1, next - prev)) : 100;
-  return `<div class="panel run">
-    <h3>📅 Auto-training schedule</h3>
-    <div class="sub" style="margin-top:4px">A new engine version is trained and rated at every data milestone: 5M, 10M, 20M, 40M, … positions</div>
-    <div class="cards">
-      <div class="card" style="grid-column: span 2"><div class="k">Next version at</div>
-        <div class="v">${next ? big(next) : '–'} <span class="sub" style="font-size:.55em">positions · now ${big(pos)}</span></div>
-        <div class="d">${esc(s.status)}</div><div class="bar" style="height:10px"><div style="width:${pct}%"></div></div></div>
-      <div class="card"><div class="k">Versions trained</div><div class="v">${done.length}</div><div class="d">next is v0.${esc(s.next_version || '?')}</div></div>
-    </div></div>`;
-}
-
-function renderTraining() {
-  const sched = renderSchedule();
-  if (!trains.length) return sched ? `<h2>Network training (GPU)</h2>` + sched : '';
-  return `<h2>Network training (GPU)</h2>` + sched + trains.map(t => {
-    const done = t.end_sb ? Math.max(0, t.sb - 1 + (t.pct >= 100 ? 1 : t.pct / 100)) : 0;
-    const pct = t.end_sb ? Math.min(100, 100 * done / t.end_sb) : 0;
-    const perSb = t.losses.length ? t.total_time / t.losses.length : null;
-    const left = t.state === 'running' && perSb ? dur(perSb * (t.end_sb - done)) : null;
-    const last = t.losses.length ? t.losses[t.losses.length - 1][1] : null;
-    const dotState = t.state === 'running' ? 'running' : t.state === 'finished' ? 'finished' : 'stopped';
-    return `<div class="panel run">
-      <h3><span class="dot ${dotState}"></span>Training: ${esc(t.net || t.name)} <span class="pill">${esc(t.state)}</span></h3>
-      <div class="sub" style="margin-top:4px">${esc(t.device || 'starting…')}${t.started ? ' · started ' + when(t.started) : ''}</div>
-      ${t.state === 'failed' ? `<div class="warnbox">Training failed: ${esc(t.error)}</div>` : ''}
-      <div class="cards">
-        <div class="card" style="grid-column: span 2"><div class="k">Progress</div>
-          <div class="v">${t.sb || 0}<span class="sub" style="font-size:.55em"> / ${t.end_sb} rounds · ${pct.toFixed(1)}%</span></div>
-          <div class="d">${left ? '~' + left + ' left' : esc(t.state)}${t.pct < 100 && t.state === 'running' ? ` · current round ${t.pct.toFixed(0)}%` : ''}</div>
-          <div class="bar" style="height:10px"><div style="width:${pct}%"></div></div></div>
-        <div class="card"><div class="k">GPU speed</div><div class="v">${big(Math.round(t.pos_s))}<span class="sub" style="font-size:.55em"> pos/s</span></div><div class="d">positions trained per second</div></div>
-        <div class="card"><div class="k">Loss</div><div class="v">${last == null ? '–' : last.toFixed(5)}</div><div class="d">lower = closer fit to the data</div></div>
-      </div>
-      ${t.losses.length > 1 ? `<h4>Loss by training round</h4><div class="chart small">${lossChart(t.losses)}</div>` : ''}
-    </div>`;
-  }).join('');
-}
-
-async function poll() {
-  try {
-    health = await (await fetch('/api/health')).json().catch(() => null);
-    lab = await (await fetch('/api/lab')).json().catch(() => null);
-    $('#labctl').innerHTML = renderLab();
-    trains = await (await fetch('/api/training')).json().catch(() => []);
-    schedule = await (await fetch('/api/schedule')).json().catch(() => null);
-    trains.sort((a, b) => b.started - a.started);
-    gens = await (await fetch('/api/datagen')).json().catch(() => []);
-    gens.forEach(trackRate);
-    // Running generators first, then newest.
-    gens.sort((a, b) => ((b.state === 'running') - (a.state === 'running')) || (b.started - a.started));
-    runs = await (await fetch('/api/runs')).json();
-    ratings = await (await fetch('/api/ratings')).json().catch(() => []);
-    ach = await (await fetch('/api/achievements')).json();
-    $('#ach-count').textContent = ach.items.filter(a => a.unlocked).length || '';
-    const want = runs.filter(r => r.status === 'running' || expanded.has(r.id)).map(r => r.id);
-    const got = await Promise.all(want.map(id => fetch('/api/run/' + encodeURIComponent(id)).then(r => r.json()).catch(() => null)));
-    details = {};
-    want.forEach((id, i) => { if (got[i]) details[id] = got[i]; });
-    $('#updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
-    render();
-  } catch (e) {
-    $('#updated').innerHTML = '<span class="neg">Dashboard server not reachable</span>';
-  }
-}
-
-// Collapsible sections: the user's choice is remembered; otherwise each section has a sensible default.
-let collapsed = {};
-try { collapsed = JSON.parse(localStorage.getItem('collapsed') || '{}'); } catch (e) {}
-
-function applyCollapse(id, summary, defaultCollapsed, forceOpen) {
-  const sec = document.getElementById(id);
-  const h = sec && sec.querySelector('h2');
-  if (!h) return;
-  const isCol = !forceOpen && (id in collapsed ? collapsed[id] : defaultCollapsed);
-  h.classList.add('sec');
-  h.insertAdjacentHTML('afterbegin', `<span class="chev">${isCol ? '▸' : '▾'}</span>`);
-  if (isCol && summary) h.insertAdjacentHTML('beforeend', `<span class="secsum"> · ${summary}</span>`);
-  [...sec.children].forEach(c => { if (c !== h) c.style.display = isCol ? 'none' : ''; });
-  h.onclick = () => {
-    collapsed[id] = !isCol;
-    try { localStorage.setItem('collapsed', JSON.stringify(collapsed)); } catch (e) {}
-    render();
-  };
-}
-
-function render() {
-  if (tab === 'ach') { $('#ach').innerHTML = renderAchievements(); return; }
-  $('#rating').innerHTML = renderRating();
-  $('#health').innerHTML = renderHealth();
-  $('#datagen').innerHTML = renderDatagen();
-  $('#training').innerHTML = renderTraining();
-  const live = runs.filter(r => r.status === 'running');
-  $('#ongoing').innerHTML = `<h2>Ongoing tournaments (${live.length})</h2>` +
-    (live.length ? live.map(r => `<div class="panel run">${renderRun(details[r.id], r)}</div>`).join('') : '<div class="empty">Nothing running right now.</div>');
-  const done = runs.filter(r => r.status !== 'running');
-  $('#finished').innerHTML = `<h2>Finished tournaments (${done.length})</h2>` + (done.length ? `<div class="panel" style="padding:4px 0"><table class="runs-table">
-    <tr><th></th><th>Test</th><th>When</th><th class="r">Games</th><th class="r">Elo vs field</th><th class="r">Rating</th><th>Outcome</th></tr>
-    ${done.map(r => `<tr class="row" data-id="${esc(r.id)}"><td style="width:20px">${expanded.has(r.id) ? '▾' : '▸'}</td><td><b>${esc(r.name)}</b> <span class="pill">${esc(r.type)}</span></td>
-      <td class="sub">${r.created ? when(r.created) : ''}</td><td class="r">${r.games}</td>
-      <td class="r ${cls(r.elo)}">${r.elo == null ? '–' : fmtElo(r.elo, r.err)}</td>
-      <td class="r">${r.perf == null ? '–' : '≈ ' + r.perf.toFixed(0) + ' <span class="sub">±' + r.perf_err.toFixed(0) + '</span>'}</td>
-      <td>${r.verdict ? (r.verdict.includes('H1') ? '<span class="pos">passed</span>' : '<span class="neg">failed</span>') : esc(r.status)}</td></tr>
-      ${expanded.has(r.id) ? `<tr><td colspan="7" class="detail">${renderRun(details[r.id], r, true)}</td></tr>` : ''}`).join('')}
-  </table></div>` : '<div class="empty">No finished tournaments yet.</div>');
-  document.querySelectorAll('tr.row').forEach(el => el.onclick = () => {
-    const id = el.dataset.id;
-    expanded.has(id) ? expanded.delete(id) : expanded.add(id);
-    render(); poll();
-  });
-
-  // One-line summaries shown next to collapsed section titles.
-  const h = health;
-  const healthBad = h && h.updated && (h.level !== 'ok' || h.now - h.updated > 30);
-  applyCollapse('health', h && h.updated ? `${h.level === 'ok' ? '✓ all good' : esc(h.level)} · CPU ${h.cpu_temp ?? '–'}°C · GPU ${h.gpu_temp ?? '–'}°C` : 'watchdog not running', true, healthBad || !(h && h.updated));
-  const genRunning = gens.filter(g => g.state === 'running' && (g.source === 'cloud' || g.now - g.updated < 15));
-  const totalPos = gens.reduce((s, g) => s + (g.positions || 0), 0);
-  applyCollapse('datagen', `${big(totalPos)} positions · ${genRunning.length ? genRunning.length + ' generator' + (genRunning.length > 1 ? 's' : '') + ' running' : 'idle'}`, false);
-  const training = trains.some(t => t.state === 'running');
-  applyCollapse('training', training ? 'training now' : `idle${schedule && schedule.next_milestone ? ' · next version at ' + big(Number(schedule.next_milestone)) + ' positions' : ''}`, !training);
-  applyCollapse('ongoing', `${live.length} running`, false);
-  applyCollapse('finished', `${done.length} tournaments`, false);
-}
-
-// "Pawnstorm-0.1" and "pawnstorm-v0.1" are the same version.
-const versionKey = name => name.toLowerCase().replace(/[^a-z0-9.]/g, '').replace(/(\D)v(\d)/, '$1$2');
-
-let ratings = [];
-
-/// One point per engine version, from the server's joint fit over every game ever played
-/// (Stockfish levels are fixed anchors), so older versions keep refining as new games arrive.
-function versions() {
-  return ratings.filter(r => /^pawnstorm/i.test(r.name)).map(r => ({
-    main: r.name, created: r.first_seen, perf: r.rating, perf_err: r.err, games: r.games,
-    status: r.live ? 'running' : 'finished', name: `${r.games} games`,
-  }));
-}
-
-function renderRating() {
-  const pts = versions();
-  if (!pts.length) return `<div class="panel"><div class="rating-label">Pawnstorm rating</div><div class="rating">–</div><div class="sub">Run a rating gauntlet to get the first estimate.</div></div>`;
-  // Headline = the strongest version (experiments that lose don't replace it);
-  // "change" = how much it gained over the best version before it.
-  const curIdx = pts.reduce((bi, p, i) => p.perf > pts[bi].perf ? i : bi, 0);
-  const cur = pts[curIdx];
-  const earlier = pts.slice(0, curIdx);
-  const prev = earlier.length ? earlier.reduce((b, p) => p.perf > b.perf ? p : b) : null;
-  const best = Math.max(...pts.filter(p => p.status !== 'running').map(p => p.perf), -Infinity);
-  const live = cur.status === 'running';
-  const delta = prev ? cur.perf - prev.perf : null;
-  return `<div class="hero">
-    <div class="panel">
-      <div class="rating-label">Pawnstorm rating · strongest version ${live ?'<span class="live-badge"><span class="dot running"></span>LIVE · updating as games finish</span>' : ''}</div>
-      <div class="rating">${cur.perf.toFixed(0)} <small>±${cur.perf_err.toFixed(0)}</small></div>
-      <div class="sub">${esc(cur.main)} · ${cur.games} rated games · all versions are rated together from every game played, so earlier versions keep refining</div>
-      <div class="facts">
-        <div class="fact"><div class="k">Gain over previous best</div><div class="v delta ${cls(delta)}">${delta == null ? '–' : sign(delta)}</div></div>
-        <div class="fact"><div class="k">Best confirmed</div><div class="v">${best === -Infinity ? '–' : best.toFixed(0)}</div></div>
-        <div class="fact"><div class="k">Versions rated</div><div class="v">${pts.length}</div></div>
-        <div class="fact"><div class="k">Gain since first version</div><div class="v ${cls(cur.perf - pts[0].perf)}">${pts.length > 1 ? sign(cur.perf - pts[0].perf) : '–'}</div></div>
-      </div>
-      <div class="sub" style="font-size:12px;margin-top:14px">± is the 95% margin of error; it shrinks as more games are played.</div>
-    </div>
-    <div class="panel chart"><div class="rating-label" style="margin-bottom:6px">Rating by version</div>${ratingChart(pts)}</div>
-  </div>`;
-}
-
-function ratingChart(pts) {
-  const W = 820, H = 300, L = 52, R = 20, T = 16, B = 46;
-  const lo = Math.min(...pts.map(p => p.perf - p.perf_err)), hi = Math.max(...pts.map(p => p.perf + p.perf_err));
-  const pad = Math.max(40, (hi - lo) * 0.12);
-  let y0 = Math.floor((lo - pad) / 50) * 50, y1 = Math.ceil((hi + pad) / 50) * 50;
-  const n = pts.length;
-  const X = i => n === 1 ? (L + W - R) / 2 : L + 20 + i / (n - 1) * (W - L - R - 40);
-  const Y = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-  let s = `<svg viewBox="0 0 ${W} ${H}">`;
-  const step = Math.max(50, Math.ceil((y1 - y0) / 5 / 50) * 50);
-  for (let v = y0; v <= y1; v += step) s += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="#2a313c"/><text x="${L - 8}" y="${Y(v) + 4}" fill="#8b949e" font-size="12" text-anchor="end">${v}</text>`;
-  s += `<polyline points="${pts.map((p, i) => `${X(i)},${Y(p.perf)}`).join(' ')}" fill="none" stroke="#58a6ff" stroke-width="2.5"/>`;
-  const every = Math.ceil(n / 10);
-  pts.forEach((p, i) => {
-    const x = X(i), live = p.status === 'running';
-    s += `<line x1="${x}" x2="${x}" y1="${Y(p.perf - p.perf_err)}" y2="${Y(p.perf + p.perf_err)}" stroke="${live ? '#3fb950' : '#58a6ff'}" stroke-opacity=".45" stroke-width="2"/>`;
-    s += `<line x1="${x - 5}" x2="${x + 5}" y1="${Y(p.perf - p.perf_err)}" y2="${Y(p.perf - p.perf_err)}" stroke="${live ? '#3fb950' : '#58a6ff'}" stroke-opacity=".45"/>`;
-    s += `<line x1="${x - 5}" x2="${x + 5}" y1="${Y(p.perf + p.perf_err)}" y2="${Y(p.perf + p.perf_err)}" stroke="${live ? '#3fb950' : '#58a6ff'}" stroke-opacity=".45"/>`;
-    if (live) s += `<circle cx="${x}" cy="${Y(p.perf)}" r="6" fill="none" stroke="#3fb950" stroke-width="2"><animate attributeName="r" values="6;14;6" dur="1.6s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values="1;0;1" dur="1.6s" repeatCount="indefinite"/></circle>`;
-    s += `<circle cx="${x}" cy="${Y(p.perf)}" r="5.5" fill="${live ? '#3fb950' : '#58a6ff'}" stroke="#0e1116" stroke-width="2"><title>${esc(p.main)}: ${p.perf.toFixed(0)} ±${p.perf_err.toFixed(0)} (${p.games} games, ${esc(p.name)})</title></circle>`;
-    s += `<text x="${x}" y="${Y(p.perf) - 12}" fill="#e6edf3" font-size="12" font-weight="700" text-anchor="middle">${p.perf.toFixed(0)}</text>`;
-    if (i % every === 0 || i === n - 1) {
-      const label = p.main.length > 16 ? p.main.slice(0, 15) + '…' : p.main;
-      s += `<text x="${x}" y="${H - 24}" fill="#8b949e" font-size="11" text-anchor="middle">${esc(label)}</text><text x="${x}" y="${H - 10}" fill="#5c6370" font-size="10" text-anchor="middle">${p.created ? new Date(p.created * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : ''}</text>`;
-    }
-  });
+function eloChart(series, W) {
+  const c = v => Math.max(-800, Math.min(800, v ?? 0));
+  const pts = series.map(p => [p[0], c(p[1])]), band = series.map(p => [c(p[2]), c(p[3])]);
+  const H = 200, L = 46, R = 12, T = 12, B = 22;
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]).concat(band.flat(), [0]);
+  let x0 = Math.min(...xs), x1 = Math.max(...xs); if (x0 === x1) x1 = x0 + 1;
+  let y0 = Math.min(...ys), y1 = Math.max(...ys); const pad = (y1 - y0) * 0.1 || 10; y0 -= pad; y1 += pad;
+  const X = v => L + (v - x0) / (x1 - x0) * (W - L - R), Y = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}">`;
+  for (let i = 0; i <= 4; i++) { const v = y0 + (y1 - y0) * i / 4; s += `<line class="gl" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${v.toFixed(0)}</text>`; }
+  if (y0 < 0 && y1 > 0) s += `<line x1="${L}" x2="${W - R}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--muted)" stroke-dasharray="4 4"/>`;
+  const top = pts.map((p, i) => `${X(p[0])},${Y(band[i][1])}`), bot = pts.map((p, i) => `${X(p[0])},${Y(band[i][0])}`).reverse();
+  s += `<polygon points="${top.concat(bot).join(' ')}" fill="var(--accent)" fill-opacity=".15"/>`;
+  s += `<polyline points="${pts.map(p => `${X(p[0])},${Y(p[1])}`).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2"/>`;
+  s += `<text class="ax" x="${W - R}" y="${H - 4}" text-anchor="end">games played →</text>`;
   return s + '</svg>';
 }
 
+// ---- Overview ----
+const helpBlock = (key, label, text) => `<div style="margin-top:12px"><span class="help" data-toggle="${key}">ⓘ ${label} ${isOpen(key) ? '▾' : '▸'}</span>${isOpen(key) ? `<div class="helptext">${text}</div>` : ''}</div>`;
+
+const HELP_RATING = `<b>Rating</b> is an Elo-style strength score: +100 means winning about 64% of games against an equal-footing opponent a hundred points lower.
+  Pawnstorm is measured by playing <b>Stockfish locked to fixed strengths</b> (“SF-2900” is Stockfish limited to 2900) and its own earlier versions.
+  <b>±</b> is the 95% margin of error; it shrinks as more games are played. The scale is relative to these opponents, not an official rating.`;
+
+function renderHero(m) {
+  const pts = m.pts, cur = m.strongest;
+  if (!cur) return `<div class="panel"><div class="rating-label">Pawnstorm rating</div><div class="rating">–</div><div class="sub">Run a rating gauntlet to get the first estimate.</div></div>`;
+  const earlier = pts.slice(0, cur.index);
+  const prev = earlier.length ? earlier.reduce((b, p) => p.perf > b.perf ? p : b) : null;
+  const delta = prev ? cur.perf - prev.perf : null;
+  const gamesAll = runs.reduce((s, r) => s + r.games, 0);
+  const W = viewW() > 860 ? Math.round((viewW() - 16) * 2 / 3) - 40 : viewW() - 40;
+  const experiments = pts.filter(p => p.verdict === 'worse').length;
+  return `<div class="hero">
+    <div class="panel">
+      <div class="rating-label">Strongest version so far ${cur.live ? '<span class="live-badge"><span class="dot running"></span>updating live</span>' : ''}</div>
+      <div class="vbig">${esc(cur.short)}</div>
+      <div class="rating">${cur.perf.toFixed(0)} <small>±${cur.err.toFixed(0)}</small></div>
+      <div>${delta == null ? '<span class="chip">First version</span>' : `<span class="chip ${delta > 0 ? 'good' : ''}">${sign(delta)} Elo</span> <span class="sub">over the previous best (${esc(prev.short)})</span>`}</div>
+      <div class="level">${levelText(cur)}</div>
+      <div class="facts">
+        <div class="fact"><div class="k">Versions tested</div><div class="v">${pts.length}${experiments ? `<span class="sub" style="font-weight:500;font-size:12px"> · ${experiments} experiment${experiments > 1 ? 's' : ''} didn't help</span>` : ''}</div></div>
+        <div class="fact"><div class="k">Games played</div><div class="v">${big(gamesAll)}</div></div>
+        <div class="fact"><div class="k">Gain since first version</div><div class="v ${cls(cur.perf - pts[0].perf)}">${pts.length > 1 ? sign(cur.perf - pts[0].perf) + ' Elo' : '–'}</div></div>
+        <div class="fact"><div class="k">First rated</div><div class="v">${pts[0].first ? new Date(pts[0].first * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '–'}</div></div>
+      </div>
+      ${helpBlock('help:rating', 'What do these numbers mean?', HELP_RATING)}
+    </div>
+    <div class="panel chart"><div class="rating-label" style="margin-bottom:6px">Rating by version, in the order they were built</div>${ratingChart(pts, W)}
+      <div class="legend"><span><i style="background:var(--gold)"></i>Strongest</span><span><i style="background:var(--accent)"></i>Improved</span><span><i style="background:var(--muted)"></i>About the same</span><span><i style="background:var(--panel);border:2px solid var(--warn)"></i>Weaker experiment</span><span>━ best so far</span></div>
+    </div>
+  </div>`;
+}
+
+/// Plain-language list of what the lab is doing right now.
+function nowRows() {
+  const rows = [], alerts = [];
+  const live = runs.filter(r => r.status === 'running');
+  if (!live.length) rows.push({ state: 'idle', icon: '⚔️', t: 'No tournaments running', d: 'Tournaments are batches of games that measure how strong a version is.', go: 'tournaments' });
+  live.forEach(r => {
+    const d = details[r.id];
+    const s = d && d.summary, n = s ? s.w + s.d + s.l : r.games;
+    const eta = d && r.games > 0 && r.total && !d.llr ? dur(d.elapsed / r.games * (r.total - r.games)) : null;
+    const sc = s && n ? ` · ${esc(short(r.main))} is scoring ${(100 * s.score).toFixed(0)}% so far` : '';
+    rows.push({
+      state: 'running', icon: '⚔️', t: r.name,
+      d: `Tournament · game ${r.games}${r.total ? ' of ' + r.total : ''}${eta ? ' · about ' + eta + ' left' : ''}${sc}`,
+      pct: r.total ? 100 * r.games / r.total : null, go: 'tournaments',
+    });
+  });
+  const genRun = gens.filter(g => g.state === 'running' && (g.source === 'cloud' || g.now - g.updated < 15));
+  const local = genRun.filter(g => g.source !== 'cloud'), cloud = genRun.filter(g => g.source === 'cloud');
+  local.forEach(g => rows.push({ state: 'running', icon: '🧪', t: 'Generating training data on this PC', d: `${big(g.positions)} positions so far · about ${big(Math.round((g.rate || 0) * 3600))} per hour · the engine plays itself and keeps the positions`, go: 'lab' }));
+  if (!local.length) rows.push({ state: 'idle', icon: '🧪', t: 'Training-data generation on this PC is off', d: lab && lab.datagen === false ? 'Use Start lab to resume it.' : '', go: 'lab' });
+  cloud.forEach(g => {
+    const left = Math.max(0, (g.minutes || 330) * 60 + 300 - (g.now - g.started));
+    rows.push({ state: 'running', icon: '☁️', t: 'Cloud data batch is running on GitHub', d: `${g.jobs_running || 0} of ${g.jobs_total || 0} jobs running · about ${dur(left)} left · ${big(g.positions || 0)} positions downloaded so far`, go: 'lab' });
+  });
+  const queued = gens.filter(g => g.source === 'cloud' && g.state === 'queued');
+  if (queued.length) rows.push({ state: 'idle', icon: '☁️', t: `${queued.length} cloud batch${queued.length > 1 ? 'es' : ''} waiting in line`, d: 'Only one batch runs at a time.', go: 'lab' });
+  const tr = trains.filter(t => t.state === 'running');
+  tr.forEach(t => {
+    const done = t.end_sb ? Math.max(0, t.sb - 1 + (t.pct >= 100 ? 1 : t.pct / 100)) : 0;
+    const perSb = t.losses.length ? t.total_time / t.losses.length : null;
+    rows.push({ state: 'running', icon: '🧠', t: `Training neural network “${t.net || t.name}”`, d: `Round ${t.sb || 0} of ${t.end_sb}${perSb ? ' · about ' + dur(perSb * (t.end_sb - done)) + ' left' : ''} · on the graphics card`, pct: t.end_sb ? 100 * done / t.end_sb : null, go: 'lab' });
+  });
+  if (!tr.length) rows.push({ state: 'idle', icon: '🧠', t: 'Graphics card is idle', d: 'No neural network is being trained right now.', go: 'lab' });
+  trains.filter(t => t.state === 'failed').slice(-1).forEach(t => alerts.push(`Training “${t.net || t.name}” failed: ${t.error}`));
+  gens.filter(g => g.cloud_stopped).slice(0, 1).forEach(g => alerts.push(`Cloud data generation stopped: ${g.cloud_stopped}`));
+  if (health && health.updated) {
+    const stale = health.now - health.updated > 30;
+    if (stale) alerts.push('The watchdog stopped responding, so temperatures are not being monitored.');
+    else if (health.level === 'ok') rows.push({ state: 'finished', icon: '🌡️', t: 'Temperatures are normal', d: `CPU ${health.cpu_temp ?? '–'}°C · GPU ${health.gpu_temp ?? '–'}°C · everything within safe limits`, go: 'lab' });
+    else alerts.push(health.level === 'manual' ? 'Everything is paused by you.' : `Paused for safety: ${health.reason}`);
+  } else if (health) alerts.push('The watchdog is not running, so temperatures are not being monitored.');
+  return { rows, alerts };
+}
+
+function labControls() {
+  if (!lab) return '';
+  const parts = ['datagen', 'watchdog', 'cloud_sync', 'auto_train'];
+  const on = parts.filter(k => lab[k]).length;
+  const paused = health && ['manual', 'warn', 'critical'].includes(health.level);
+  let b = '';
+  if (lab.busy) return `<span class="sub">${lab.busy === 'start' ? 'Starting…' : 'Stopping…'}</span>`;
+  if (on < parts.length) b += `<button class="btn sm" data-act="lab-start">▶ Start lab</button>`;
+  if (on > 0) b += `<button class="btn sm" data-act="lab-stop">■ Stop lab</button>`;
+  if (health && health.updated) b += paused ? `<button class="btn sm" data-act="resume">▶ Resume</button>` : `<button class="btn sm" data-act="pause">⏸ Pause</button>`;
+  return b;
+}
+
+function renderNow() {
+  const { rows, alerts } = nowRows();
+  return `<div class="panel run" style="margin-top:16px">
+    <div class="now-head"><h3>Right now</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${labControls()}</div></div>
+    ${alerts.map(a => `<div class="alertbox" data-go="lab">⚠ ${esc(a)}</div>`).join('')}
+    ${rows.map(r => `<div class="now-row ${r.state === 'idle' ? 'idle' : ''}" data-go="${r.go}">
+      <span class="now-ic">${r.icon}</span>
+      <div class="now-main"><div class="now-t">${esc(r.t)}</div>${r.d ? `<div class="now-d">${r.d}</div>` : ''}</div>
+      ${r.pct != null ? `<div class="now-bar">${r.pct.toFixed(0)}%<div class="bar"><div style="width:${Math.min(100, r.pct)}%"></div></div></div>` : r.state === 'running' ? '<span class="dot running" style="align-self:center"></span>' : ''}
+    </div>`).join('')}
+  </div>`;
+}
+
+const achRow = (a, mini) => `<div class="ach ${a.unlocked ? a.tier : 'locked'} ${mini ? 'mini' : ''}"><div class="ic">${a.icon}</div>
+  <div class="body"><div class="t">${esc(a.title)}</div><div class="d">${esc(a.desc)}</div></div>
+  <div class="w">${a.unlocked ? `<span class="pos">✓ ${when(a.date)}</span>${a.main ? `<span class="wmain">${esc(short(a.main))}</span>` : ''}` : '🔒 not yet'}</div></div>`;
+
+function renderGoals() {
+  if (!ach) return '';
+  const unlocked = ach.items.filter(a => a.unlocked).sort((a, b) => b.date - a.date);
+  const locked = ach.items.filter(a => !a.unlocked);
+  const next = ['rating', 'wins', 'matches'].map(c => locked.filter(a => a.cat === c).sort((a, b) => a.key - b.key)[0]).filter(Boolean);
+  const done = unlocked.length, total = ach.items.length;
+  return `<div class="two">
+    <div><h2>Latest achievements <span class="sub" style="text-transform:none;letter-spacing:0">· ${done} of ${total} unlocked</span></h2>
+      <div class="ach-list">${unlocked.slice(0, 3).map(a => achRow(a, true)).join('') || '<div class="empty">None yet.</div>'}</div></div>
+    <div><h2>Next goals</h2><div class="ach-list">${next.map(a => achRow(a, true)).join('') || '<div class="empty">All goals reached!</div>'}</div></div>
+  </div>
+  <div style="margin-top:10px"><span class="help" data-go="achievements">See all achievements →</span></div>`;
+}
+
+function renderOverview(m) {
+  return renderHero(m) + renderNow() + renderGoals();
+}
+
+// ---- Versions ----
+function renderVersions(m) {
+  if (!m.pts.length) return `<h2>Versions</h2><div class="empty">No versions have been rated yet.</div>`;
+  const byAch = achByVersion();
+  const list = m.pts.slice();
+  if (ui.sort === 'new') list.reverse(); else list.sort((a, b) => b.perf - a.perf);
+  const lo = Math.floor((Math.min(...m.pts.map(p => p.perf - p.err)) - 25) / 100) * 100;
+  const hi = Math.ceil((Math.max(...m.pts.map(p => p.perf + p.err)) + 25) / 100) * 100;
+  const X = v => Math.max(0, Math.min(100, 100 * (v - lo) / (hi - lo)));
+  const tests = key => runs.filter(r => vkey(r.main) === key);
+  const card = p => {
+    const open = isOpen('ver:' + p.key);
+    const mine = byAch[p.key] || [];
+    const sf = p.vs.filter(o => o.n >= 6).sort((a, b) => (b.anchor ?? -1) - (a.anchor ?? -1) || a.name.localeCompare(b.name));
+    const scoreChip = o => { const s = pct(o.w, o.d, o.n); return `<span class="score ${s >= 55 ? 'good' : s <= 45 ? 'bad' : ''}">${esc(o.name.replace(/^pawnstorm-/i, ''))} <b>${s.toFixed(0)}%</b></span>`; };
+    const vcls = p.strongest ? 'best' : p.verdict === 'worse' ? 'worse' : p.verdict === 'same' ? 'same' : '';
+    const rated = o => o.anchor != null ? o.anchor.toFixed(0) : (() => { const q = m.pts.find(x => x.key === vkey(o.name)); return q ? q.perf.toFixed(0) : '–'; })();
+    let h = `<div class="vcard ${p.strongest ? 'is-best' : ''} ${p.verdict === 'worse' ? 'is-worse' : ''}">
+      <div class="vtop" data-toggle="ver:${esc(p.key)}">
+        <div style="min-width:0"><div class="vtitle">${esc(p.short)}</div><div class="vchips">${chips(p)}</div></div>
+        <div class="vrate"><b>${p.perf.toFixed(0)}</b><small>±${p.err.toFixed(0)} Elo</small></div>
+      </div>
+      <div class="vdesc sub">${esc(describe(p))}</div>
+      <div class="level">${levelText(p)}</div>
+      <div class="scale ${vcls}"><div class="fill" style="width:${X(p.perf)}%"></div><div class="err" style="left:${X(p.perf - p.err)}%;width:${X(p.perf + p.err) - X(p.perf - p.err)}%"></div></div>
+      <div class="scale-l"><span>${lo}</span><span>${hi}</span></div>
+      <div class="vstats">
+        ${p.gain != null ? `<span><b class="${cls(p.gain)}">${sign(p.gain)}</b> vs best before (${esc(p.prev.short)})</span>` : ''}
+        <span><b>${p.games}</b> games</span>
+        <span>first rated ${p.first ? when(p.first) : '–'}</span>
+      </div>
+      ${mine.length ? `<div class="vach">${mine.slice(0, open ? 99 : 6).map(a => `<span class="chip best" title="${esc(a.desc)}">${a.icon} ${esc(a.title)}</span>`).join('')}${!open && mine.length > 6 ? `<span class="chip">+${mine.length - 6} more</span>` : ''}</div>` : ''}
+      <div class="vmore" data-toggle="ver:${esc(p.key)}">${open ? '▾ Hide results' : '▸ Show results against every opponent'}</div>`;
+    if (open) {
+      h += `<h4 class="sub" style="font-size:12px;margin:16px 0 8px;text-transform:uppercase;letter-spacing:.6px">Results, all tests combined</h4>
+        <div class="tbl"><table><tr><th>Opponent</th><th class="r">Won</th><th class="r">Drew</th><th class="r">Lost</th><th class="r">Score</th></tr>
+        ${sf.map(o => `<tr><td>${esc(o.name.replace(/^pawnstorm-/i, ''))}<div class="sub" style="font-size:11px">rated ${rated(o)} · ${o.n} games</div></td><td class="r">${o.w}</td><td class="r">${o.d}</td><td class="r">${o.l}</td><td class="r"><b>${pct(o.w, o.d, o.n).toFixed(0)}%</b></td></tr>`).join('') || '<tr><td colspan="5" class="sub">No games yet.</td></tr>'}
+        </table></div>`;
+      const ts = tests(p.key);
+      if (ts.length) h += `<h4 class="sub" style="font-size:12px;margin:16px 0 8px;text-transform:uppercase;letter-spacing:.6px">Tournaments for this version</h4>` +
+        ts.map(r => `<div class="now-row" data-go="tournaments" data-run="${esc(r.id)}"><div class="now-main"><div class="now-t">${esc(r.name)}</div><div class="now-d">${r.games}${r.total ? ' / ' + r.total : ''} games · ${r.status === 'running' ? 'running' : r.created ? when(r.created) : ''}${r.perf != null ? ' · measured ' + r.perf.toFixed(0) : ''}</div></div><span class="sub">›</span></div>`).join('');
+      if (!mine.length) h += `<div class="sub" style="margin-top:12px">No achievements earned with this version yet.</div>`;
+    } else if (sf.length) {
+      h += `<div class="vach" style="margin-top:8px">${sf.slice(0, 5).map(scoreChip).join('')}</div>`;
+    }
+    return h + '</div>';
+  };
+  return `<h2>Engine versions</h2>
+    <p class="lead">Every version of Pawnstorm that has been rated. The bar shows its level on a shared scale (${lo}–${hi}); the thin line is the margin of error. Experiments that were weaker than the best version so far stay on the list, marked as such, and never replace the headline rating.</p>
+    <div class="toolbar"><span class="sub">Sort by</span>
+      <button class="btn sm ${ui.sort === 'new' ? 'on' : ''}" data-set="sort:new">Newest first</button>
+      <button class="btn sm ${ui.sort === 'rating' ? 'on' : ''}" data-set="sort:rating">Strongest first</button></div>
+    <div class="vlist">${list.map(card).join('')}</div>`;
+}
+
+// ---- Tournaments ----
 function renderRun(r, b, compact) {
   if (!r) return `<h3><span class="dot ${b.status}"></span>${esc(b.name)}</h3><div class="sub" style="margin-top:8px">Loading…</div>`;
   b = r.brief; const s = r.summary;
-  const pct = b.total ? Math.min(100, 100 * b.games / b.total) : 0;
-  const eta = b.status === 'running' && b.games > 0 && b.total && !r.llr ? ' · ~' + dur(r.elapsed / b.games * (b.total - b.games)) + ' left' : '';
+  const pctDone = b.total ? Math.min(100, 100 * b.games / b.total) : 0;
+  const eta = b.status === 'running' && b.games > 0 && b.total && !r.llr ? ' · about ' + dur(r.elapsed / b.games * (b.total - b.games)) + ' left' : '';
+  const W = viewW() - 64;
   let html = compact ? '' : `<h3><span class="dot ${b.status}"></span>${esc(b.name)} <span class="pill">${esc(b.type)}</span></h3>`;
-  html += `<div class="sub" style="margin-top:${compact ? 12 : 4}px">${esc(b.tc)} · ${r.concurrency || '?'} games at a time · ${b.status === 'running' ? 'running for ' + dur(r.elapsed) : 'took ' + dur(r.elapsed)}${r.notes ? ' · ' + esc(r.notes) : ''}</div>
+  html += `<div class="sub" style="margin-top:${compact ? 12 : 4}px">${esc(short(b.main))} · ${esc(b.tc)} per game · ${r.concurrency || '?'} games at a time · ${b.status === 'running' ? 'running for ' + dur(r.elapsed) : 'took ' + dur(r.elapsed)}${r.notes ? ' · ' + esc(r.notes) : ''}</div>
     <div class="cards">
-      <div class="card"><div class="k">Games</div><div class="v">${b.games}${b.total ? `<span class="sub" style="font-size:.55em"> / ${b.total}</span>` : ''}</div>
-        <div class="d">+${s.w} =${s.d} −${s.l}${eta}</div>${b.total ? `<div class="bar"><div style="width:${pct}%"></div></div>` : ''}</div>`;
+      <div class="card"><div class="k">Games played</div><div class="v">${b.games}${b.total ? `<span class="sub" style="font-size:.55em"> / ${b.total}</span>` : ''}</div>
+        <div class="d">${s.w} won · ${s.d} drawn · ${s.l} lost${eta}</div>${b.total ? `<div class="bar"><div style="width:${pctDone}%"></div></div>` : ''}</div>`;
   if (b.perf != null) html += `
-      <div class="card"><div class="k">Rating from this test</div><div class="v">${b.perf.toFixed(0)} <span class="sub" style="font-size:.55em">±${b.perf_err.toFixed(0)}</span></div>
-        <div class="d">${esc(b.main)}${b.derived ? ' · vs our earlier versions' : ' · vs anchor engines'}</div></div>`;
+      <div class="card"><div class="k">This test alone (rough)</div><div class="v">${b.perf.toFixed(0)} <span class="sub" style="font-size:.55em">±${b.perf_err.toFixed(0)}</span></div>
+        <div class="d">${esc(short(b.main))}${b.derived ? ' · vs our earlier versions' : ' · vs Stockfish levels'}</div></div>`;
   html += `
-      <div class="card"><div class="k">Elo vs field</div><div class="v ${cls(s.elo)}">${fmtElo(s.elo, s.err)}</div>
-        <div class="d">score ${(s.score * 100).toFixed(1)}% · LOS ${(s.los * 100).toFixed(1)}%</div></div>`;
+      <div class="card"><div class="k">Ahead of opponents by</div><div class="v ${cls(s.elo)}">${fmtElo(s.elo, s.err)}</div>
+        <div class="d">scored ${(s.score * 100).toFixed(0)}% · ${(s.los * 100).toFixed(0)}% chance it is truly stronger</div></div>`;
   if (r.llr) {
     const span = r.llr.hi - r.llr.lo, x = Math.max(0, Math.min(100, (r.llr.v - r.llr.lo) / span * 100));
-    const verdict = b.verdict ? (b.verdict.includes('H1') ? '<span class="pos">PASSED ✓</span>' : '<span class="neg">FAILED ✗</span>') : 'still testing…';
+    const verdict = b.verdict ? (b.verdict.includes('H1') ? '<span class="pos">Passed ✓</span>' : '<span class="neg">Failed ✗</span>') : 'Testing…';
     html += `
-      <div class="card"><div class="k">SPRT [${r.llr.elo0 ?? ''}, ${r.llr.elo1 ?? ''}]</div><div class="v">${r.llr.v.toFixed(2)}</div>
-        <div class="d">LLR (${r.llr.lo} … ${r.llr.hi}) · ${verdict}</div><div class="llr"><div class="m" style="left:${x}%"></div></div></div>`;
+      <div class="card wide"><div class="k">Improvement test (SPRT)</div><div class="v">${verdict}</div>
+        <div class="d">Confidence score ${r.llr.v.toFixed(2)} · it passes at ${r.llr.hi} and fails at ${r.llr.lo}</div><div class="llr"><div class="m" style="left:${x}%"></div></div>
+        ${helpBlock('help:sprt:' + b.id, 'What is this?', '<b>SPRT</b> plays games until it is statistically confident that a change helps (or does not). The <b>confidence score (LLR)</b> moves right when the change looks better and left when it looks worse; reaching the right edge means the change is a proven improvement, the left edge means it is not.')}</div>`;
   }
   html += '</div>';
   if (r.problems.length) html += `<div class="warnbox">⚠ Problems: ${r.problems.map(p => `${p.count}× ${esc(p.kind)} (${esc(p.engine)})`).join(', ')}</div>`;
-
-  if (r.live.length) html += `<h4>Live games (${r.live.length})</h4><div class="games">${r.live.map(liveGame).join('')}</div>`;
-
-  if (r.series.length > 1) html += `<h4>Elo vs field as games come in</h4><div class="chart small">${eloChart(r.series)}</div>`;
-
-  if (r.opponents.length) html += `<h4>Results vs opponents</h4><div class="tbl"><table>
-    <tr><th>Opponent</th><th class="r">Rating</th><th class="r">Games</th><th class="r">W</th><th class="r">D</th><th class="r">L</th><th class="r">Score</th><th class="r">Elo diff</th></tr>
-    ${r.opponents.map(o => `<tr><td>${esc(o.name)}</td><td class="r">${o.anchor ?? '–'}</td><td class="r">${o.w + o.d + o.l}</td>
-      <td class="r">${o.w}</td><td class="r">${o.d}</td><td class="r">${o.l}</td><td class="r">${(o.score * 100).toFixed(1)}%</td>
+  if (r.live.length) html += `<h4>Games being played now (${r.live.length})</h4><div class="games">${r.live.map(liveGame).join('')}</div>`;
+  if (r.series.length > 1) html += `<h4>How far ahead it is as games come in</h4><div class="chart small">${eloChart(r.series, W)}</div>`;
+  if (r.opponents.length) html += `<h4>Results against each opponent</h4><div class="tbl"><table>
+    <tr><th>Opponent</th><th class="r">Won</th><th class="r">Drew</th><th class="r">Lost</th><th class="r">Score</th><th class="r">Elo diff</th></tr>
+    ${r.opponents.map(o => `<tr><td>${esc(canon(o.name).replace(/^pawnstorm-/i, ''))}<div class="sub" style="font-size:11px">${o.anchor != null ? 'rated ' + o.anchor + ' · ' : ''}${o.w + o.d + o.l} games</div></td>
+      <td class="r">${o.w}</td><td class="r">${o.d}</td><td class="r">${o.l}</td><td class="r"><b>${(o.score * 100).toFixed(0)}%</b></td>
       <td class="r ${cls(o.elo)}">${fmtElo(o.elo, o.err)}</td></tr>`).join('')}
   </table></div>`;
-
   if (r.recent.length) html += `<h4>Recent games</h4><div class="tbl"><table>
     <tr><th>#</th><th>White</th><th>Black</th><th>Result</th><th>How</th><th class="r">Moves</th><th class="r">Duration</th></tr>
     ${r.recent.slice(0, compact ? 10 : 12).map(g => {
@@ -647,26 +751,336 @@ function liveGame(g) {
   </div>`;
 }
 
-function eloChart(series) {
-  const c = v => Math.max(-800, Math.min(800, v ?? 0));
-  const pts = series.map(p => [p[0], c(p[1])]), band = series.map(p => [c(p[2]), c(p[3])]);
-  const W = 800, H = 200, L = 46, R = 12, T = 12, B = 22;
-  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]).concat(band.flat(), [0]);
-  let x0 = Math.min(...xs), x1 = Math.max(...xs); if (x0 === x1) x1 = x0 + 1;
-  let y0 = Math.min(...ys), y1 = Math.max(...ys); const pad = (y1 - y0) * 0.1 || 10; y0 -= pad; y1 += pad;
-  const X = v => L + (v - x0) / (x1 - x0) * (W - L - R), Y = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-  let s = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
-  for (let i = 0; i <= 4; i++) { const v = y0 + (y1 - y0) * i / 4; s += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="#2a313c"/><text x="${L - 6}" y="${Y(v) + 4}" fill="#8b949e" font-size="11" text-anchor="end">${v.toFixed(0)}</text>`; }
-  if (y0 < 0 && y1 > 0) s += `<line x1="${L}" x2="${W - R}" y1="${Y(0)}" y2="${Y(0)}" stroke="#8b949e" stroke-dasharray="4 4"/>`;
-  const top = pts.map((p, i) => `${X(p[0])},${Y(band[i][1])}`), bot = pts.map((p, i) => `${X(p[0])},${Y(band[i][0])}`).reverse();
-  s += `<polygon points="${top.concat(bot).join(' ')}" fill="rgba(88,166,255,.15)"/>`;
-  s += `<polyline points="${pts.map(p => `${X(p[0])},${Y(p[1])}`).join(' ')}" fill="none" stroke="#58a6ff" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
-  s += `<text x="${W - R}" y="${H - 4}" fill="#8b949e" font-size="11" text-anchor="end">games played →</text>`;
-  return s + '</svg>';
+function renderTournaments() {
+  const live = runs.filter(r => r.status === 'running');
+  const done = runs.filter(r => r.status !== 'running');
+  let h = `<h2>In progress (${live.length})</h2>` +
+    (live.length ? live.map(r => `<div class="panel run">${renderRun(details[r.id], r)}</div>`).join('') : '<div class="empty">Nothing is running right now.</div>');
+  h += `<h2>Finished (${done.length})</h2><p class="lead">Tap a tournament to see its results, games and charts.</p>`;
+  h += done.map(r => {
+    const open = isOpen('run:' + r.id);
+    const score = r.elo == null ? null : 100 / (1 + Math.pow(10, -r.elo / 400));
+    const res = r.verdict
+      ? (r.verdict.includes('H1') ? '<span class="chip good">Passed</span>' : '<span class="chip bad">Failed</span>')
+      : r.perf != null ? `<div><b style="font-size:18px">${r.perf.toFixed(0)}</b> <span class="sub">±${r.perf_err.toFixed(0)}</span></div><div class="sub" style="font-size:12px">rating measured</div>`
+      : r.status === 'stopped' ? '<span class="chip warn">Stopped</span>' : '';
+    return `<div class="trow"><div class="trow-top" data-toggle="run:${esc(r.id)}"><span class="chev2">${open ? '▾' : '▸'}</span>
+      <div class="trow-main"><b>${esc(r.name)}</b> <span class="pill">${esc(r.type)}</span>
+        <div class="sub" style="font-size:13px">${r.created ? when(r.created) : ''} · ${r.games} games${score != null ? ` · scored ${score.toFixed(0)}%` : ''}</div></div>
+      <div class="trow-res">${res}</div></div>
+      ${open ? `<div class="trow-body">${renderRun(details[r.id], r, true)}</div>` : ''}</div>`;
+  }).join('') || '<div class="empty">No finished tournaments yet.</div>';
+  return h;
 }
 
+// ---- Achievements ----
+const CATEGORIES = [['rating', 'Rating milestones'], ['wins', 'First wins'], ['matches', 'Match victories'], ['sprt', 'Proven improvements'], ['games', 'Games played']];
+
+function renderAchievements(m) {
+  if (!ach) return '<div class="empty">Loading…</div>';
+  const total = ach.items.length, got = ach.items.filter(a => a.unlocked);
+  const group = (title, items, sub, keepCase) => items.length ? `<h2>${keepCase ? `<span style="text-transform:none">${esc(title)}</span>` : esc(title)} <span class="sub" style="text-transform:none;letter-spacing:0">· ${sub ?? items.filter(a => a.unlocked).length + ' of ' + items.length}</span></h2><div class="ach-list">${items.map(a => achRow(a)).join('')}</div>` : '';
+  let body;
+  if (ui.group === 'version') {
+    const by = achByVersion();
+    const order = m.pts.slice().reverse();
+    body = order.filter(p => by[p.key]).map(p => group(p.short, by[p.key].sort((a, b) => b.date - a.date), `${by[p.key].length} earned · ${p.perf.toFixed(0)} rating`, true)).join('') +
+      group('Still locked', ach.items.filter(a => !a.unlocked).sort((a, b) => a.cat.localeCompare(b.cat) || a.key - b.key), ach.items.filter(a => !a.unlocked).length + ' goals');
+  } else {
+    body = group('Recently unlocked', got.slice().sort((a, b) => b.date - a.date).slice(0, 5), 'newest first') +
+      CATEGORIES.map(([cat, label]) => {
+        const items = ach.items.filter(a => a.cat === cat).sort((a, b) => a.key - b.key);
+        // "Proven improvements" needs an SPRT test, which only exists once one has been run.
+        const note = cat === 'sprt' && !items.some(a => a.unlocked) ? 'none unlocked yet · needs a head-to-head SPRT test of a change' : undefined;
+        return group(label, items, note);
+      }).join('');
+  }
+  return `<div class="panel" style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      <div><div class="rating-label">Achievements unlocked</div><div class="rating" style="font-size:44px">${got.length}<small> / ${total}</small></div></div>
+      <div style="flex:1;min-width:160px"><div class="bar big"><div style="width:${100 * got.length / Math.max(1, total)}%"></div></div></div>
+    </div>
+    <div class="toolbar" style="margin-top:16px"><span class="sub">Group by</span>
+      <button class="btn sm ${ui.group === 'cat' ? 'on' : ''}" data-set="group:cat">Type</button>
+      <button class="btn sm ${ui.group === 'version' ? 'on' : ''}" data-set="group:version">Engine version</button></div>` + body;
+}
+
+// ---- Lab ----
+function section(id, title, summary, body, defOpen) {
+  const open = isOpen(id, defOpen);
+  return `<h2 class="sec" data-toggle="${id}" data-def="${defOpen ? 1 : 0}"><span class="chev">${open ? '▾' : '▸'}</span>${esc(title)}${!open && summary ? `<span class="secsum"> · ${summary}</span>` : ''}</h2>${open ? body : ''}`;
+}
+
+function renderCloud(g) {
+  if (g.state === 'queued') {
+    return `<div class="panel run"><h3><span class="dot stopped"></span>Cloud batch ${esc(g.run_id)} <span class="pill">GitHub Actions</span> <span class="pill">queued</span></h3>
+      <div class="sub" style="margin-top:4px">Waiting for the current batch to finish (only one batch runs at a time) · <a href="${esc(g.url)}" target="_blank" rel="noopener">view on GitHub</a></div></div>`;
+  }
+  const running = g.state === 'running';
+  const total = g.jobs_total || 0, got = g.jobs_downloaded || 0;
+  const elapsed = (running ? g.now : g.updated) - g.started;
+  const planned = (g.minutes || 330) * 60 + 300;
+  const p = running ? Math.min(99, 100 * elapsed / planned) : 100;
+  const perJob = got ? g.positions / got : null;
+  const projected = perJob ? perJob * total : null;
+  const rate = perJob ? perJob * total / ((g.minutes || 330) * 60) : null;
+  const state = running ? 'running' : 'finished';
+  return `<div class="panel run">
+    <h3><span class="dot ${state}"></span>Cloud batch ${esc(g.run_id)} <span class="pill">GitHub Actions</span> <span class="pill">${state}</span></h3>
+    <div class="sub" style="margin-top:4px">${total} jobs × ${g.minutes || 330} min · ${esc(g.cpu || 'cloud runners')} · <a href="${esc(g.url)}" target="_blank" rel="noopener">view on GitHub</a></div>
+    ${g.warning ? `<div class="warnbox">⚠ ${esc(g.warning)}</div>` : ''}
+    <div class="cards">
+      <div class="card wide"><div class="k">Batch progress</div>
+        <div class="v">${running ? dur(Math.max(0, planned - elapsed)) + '<span class="sub" style="font-size:.55em"> left</span>' : 'done'}</div>
+        <div class="d">${g.jobs_running || 0} running · ${g.jobs_queued || 0} queued · ${g.jobs_done || 0} finished${g.jobs_failed ? ` · <span class="neg">${g.jobs_failed} failed</span>` : ''}</div>
+        <div class="bar big"><div style="width:${p}%"></div></div></div>
+      <div class="card"><div class="k">Positions downloaded</div><div class="v">${big(g.positions || 0)}</div>
+        <div class="d">${got}/${total} jobs' data on this PC</div></div>
+      <div class="card"><div class="k">Expected from batch</div><div class="v">${projected ? '~' + big(Math.round(projected)) : '–'}</div>
+        <div class="d">${rate ? '≈ ' + big(Math.round(rate * 3600)) + ' / hour' : 'known once the first job finishes'}</div></div>
+      <div class="card"><div class="k">Data on disk</div><div class="v">${(g.bytes / 1e9).toFixed(2)}<span class="sub" style="font-size:.55em"> GB</span></div><div class="d">gzipped text</div></div>
+    </div></div>`;
+}
+
+function renderLocalGen(g) {
+  const running = g.state === 'running' && g.now - g.updated < 15;
+  const state = g.state === 'finished' ? 'finished' : running ? 'running' : 'stopped';
+  const p = Math.min(100, 100 * g.positions / g.target);
+  const left = running && g.rate > 0 ? dur((g.target - g.positions) / g.rate) : null;
+  const wdl = g.white_wins + g.draws + g.black_wins || 1;
+  const nps = g.nodes / Math.max(1, g.updated - g.started);
+  return `<div class="panel run">
+    <h3><span class="dot ${state}"></span>Self-play on this PC: ${esc(g.name)} <span class="pill">${state}</span></h3>
+    <div class="sub" style="margin-top:4px">${g.threads} CPU threads · ${big(g.soft_nodes)} nodes per move · running for ${dur((running ? g.now : g.updated) - g.started)}</div>
+    <div class="cards">
+      <div class="card wide"><div class="k">Training positions</div>
+        <div class="v">${big(g.positions)} <span class="sub" style="font-size:.55em">/ ${big(g.target)} · ${p.toFixed(1)}%</span></div>
+        <div class="d">${left ? '~' + left + ' left' : state}</div><div class="bar big"><div style="width:${p}%"></div></div></div>
+      <div class="card"><div class="k">Speed</div><div class="v">${big(Math.round(g.rate || 0))}<span class="sub" style="font-size:.55em"> pos/s</span></div><div class="d">${big(Math.round(nps))} nodes/s searched</div></div>
+      <div class="card"><div class="k">Games played</div><div class="v">${big(g.games)}</div><div class="d">avg ${(g.plies / Math.max(1, g.games)).toFixed(0)} plies · ${(g.positions / Math.max(1, g.games)).toFixed(0)} kept per game</div></div>
+      <div class="card"><div class="k">Results (white / draw / black)</div><div class="v" style="font-size:18px;margin-top:6px">${(100 * g.white_wins / wdl).toFixed(0)}% / <span class="sub">${(100 * g.draws / wdl).toFixed(0)}%</span> / ${(100 * g.black_wins / wdl).toFixed(0)}%</div></div>
+      <div class="card"><div class="k">Data on disk</div><div class="v">${(g.bytes / 1e9).toFixed(2)}<span class="sub" style="font-size:.55em"> GB</span></div><div class="d">text, converted for training later</div></div>
+    </div></div>`;
+}
+
+function renderDatagen() {
+  const totalPos = gens.reduce((s, g) => s + (g.positions || 0), 0);
+  const stopped = gens.find(g => g.cloud_stopped);
+  const active = g => g.source === 'cloud' ? ['running', 'queued'].includes(g.state) : g.state === 'running' || !g.finished_old;
+  const isCloud = g => g.source === 'cloud';
+  const recent = gens.filter(g => !isCloud(g) || g.state === 'running' || g.state === 'queued');
+  const olderAll = gens.filter(g => isCloud(g) && g.state !== 'running' && g.state !== 'queued');
+  // The newest finished cloud batch stays visible; the rest are summarised.
+  const newest = olderAll.slice().sort((a, b) => b.started - a.started)[0];
+  const older = olderAll.filter(g => g !== newest);
+  const runningN = gens.filter(g => g.state === 'running' && (isCloud(g) || g.now - g.updated < 15)).length;
+  const sum = `${big(totalPos)} positions · ${runningN ? runningN + ' generator' + (runningN > 1 ? 's' : '') + ' running' : 'idle'}`;
+  let body = `<p class="lead">The engine plays games against itself; each position, with the result, becomes training data for the next neural network. More (and better) data makes a stronger engine.</p>`;
+  if (stopped) body += `<div class="warnbox" style="margin-bottom:12px">⛔ Cloud generation stopped because GitHub reported: ${esc(stopped.cloud_stopped)}</div>`;
+  body += recent.map(g => isCloud(g) ? renderCloud(g) : renderLocalGen(g)).join('');
+  if (newest) body += renderCloud(newest);
+  if (older.length) {
+    const pos = older.reduce((s, g) => s + (g.positions || 0), 0), failed = older.reduce((s, g) => s + (g.jobs_failed || 0), 0);
+    const open = isOpen('older-cloud');
+    body += `<div class="panel run"><div class="now-row" data-toggle="older-cloud" style="border:0"><span class="chev2">${open ? '▾' : '▸'}</span><div class="now-main"><div class="now-t">${older.length} earlier cloud batch${older.length > 1 ? 'es' : ''}</div><div class="now-d">${big(pos)} positions in total${failed ? ' · ' + failed + ' failed jobs' : ''}</div></div></div></div>`;
+    if (open) body += older.sort((a, b) => b.started - a.started).map(renderCloud).join('');
+  }
+  return gens.length ? section('sec:datagen', 'Training data', sum, body, true) : '';
+}
+
+function trainCard(t) {
+  const done = t.end_sb ? Math.max(0, t.sb - 1 + (t.pct >= 100 ? 1 : t.pct / 100)) : 0;
+  const p = t.end_sb ? Math.min(100, 100 * done / t.end_sb) : 0;
+  const perSb = t.losses.length ? t.total_time / t.losses.length : null;
+  const left = t.state === 'running' && perSb ? dur(perSb * (t.end_sb - done)) : null;
+  const last = t.losses.length ? t.losses[t.losses.length - 1][1] : null;
+  const dotState = t.state === 'running' ? 'running' : t.state === 'finished' ? 'finished' : 'stopped';
+  return `<div class="panel run">
+    <h3><span class="dot ${dotState}"></span>Training: ${esc(t.net || t.name)} <span class="pill">${esc(t.state)}</span></h3>
+    <div class="sub" style="margin-top:4px">${esc(t.device || 'starting…')}${t.started ? ' · started ' + when(t.started) : ''}</div>
+    ${t.state === 'failed' ? `<div class="warnbox">Training failed: ${esc(t.error)}</div>` : ''}
+    <div class="cards">
+      <div class="card wide"><div class="k">Progress</div>
+        <div class="v">${t.sb || 0}<span class="sub" style="font-size:.55em"> / ${t.end_sb} rounds · ${p.toFixed(1)}%</span></div>
+        <div class="d">${left ? '~' + left + ' left' : esc(t.state)}${t.pct < 100 && t.state === 'running' ? ` · current round ${t.pct.toFixed(0)}%` : ''}</div>
+        <div class="bar big"><div style="width:${p}%"></div></div></div>
+      <div class="card"><div class="k">GPU speed</div><div class="v">${big(Math.round(t.pos_s))}<span class="sub" style="font-size:.55em"> pos/s</span></div><div class="d">positions trained per second</div></div>
+      <div class="card"><div class="k">Loss</div><div class="v">${last == null ? '–' : last.toFixed(5)}</div><div class="d">lower = closer fit to the data</div></div>
+    </div>
+    ${t.losses.length > 1 ? `<h4>Loss by training round</h4><div class="chart small">${lossChart(t.losses, viewW() - 64)}</div>` : ''}
+  </div>`;
+}
+
+function renderSchedule() {
+  const s = schedule;
+  if (!s || !s.status) return '';
+  const pos = Number(s.positions || 0), next = Number(s.next_milestone || 0);
+  const done = (s.done || '').split(',').filter(Boolean).map(Number);
+  const prev = done.length ? Math.max(...done.filter(d => d <= pos), 0) : 0;
+  const p = next ? Math.min(100, 100 * (pos - prev) / Math.max(1, next - prev)) : 100;
+  return `<div class="panel run">
+    <h3>📅 Automatic training schedule</h3>
+    <div class="sub" style="margin-top:4px">${lab && lab.auto_train ? 'A new version is trained and rated at every data milestone.' : 'Automatic training is switched off; the plan below is where it left off.'}</div>
+    <div class="cards">
+      <div class="card wide"><div class="k">Next milestone</div>
+        <div class="v">${next ? big(next) : '–'} <span class="sub" style="font-size:.55em">positions · now ${big(pos)}</span></div>
+        <div class="d">${esc(s.status)}</div><div class="bar big"><div style="width:${p}%"></div></div></div>
+      <div class="card"><div class="k">Versions trained this way</div><div class="v">${done.length}</div></div>
+    </div></div>`;
+}
+
+function renderTraining() {
+  const running = trains.filter(t => t.state === 'running');
+  const rest = trains.filter(t => t.state !== 'running');
+  const latest = rest[0];
+  const older = rest.slice(1);
+  const sum = running.length ? 'training now' : 'idle' + (schedule && schedule.next_milestone && lab && lab.auto_train ? ' · next at ' + big(Number(schedule.next_milestone)) + ' positions' : '');
+  let body = `<p class="lead">A neural network is trained on the generated positions using the graphics card. When it finishes, it becomes a new engine version that is rated in a tournament.</p>` + renderSchedule();
+  body += running.map(trainCard).join('') + (latest ? trainCard(latest) : '');
+  if (older.length) {
+    const open = isOpen('older-train');
+    body += `<div class="panel run"><div class="now-row" data-toggle="older-train" style="border:0"><span class="chev2">${open ? '▾' : '▸'}</span><div class="now-main"><div class="now-t">${older.length} earlier training run${older.length > 1 ? 's' : ''}</div></div></div></div>`;
+    if (open) body += older.map(trainCard).join('');
+  }
+  return section('sec:training', 'Neural network training (GPU)', sum, body, running.length > 0);
+}
+
+function renderHealth() {
+  const h = health;
+  if (!h || !h.updated) return section('sec:health', 'System health', 'watchdog not running', `<div class="warnbox">The watchdog isn't running, so temperatures aren't being monitored.</div>`, true);
+  const stale = h.now - h.updated > 30;
+  const lim = k => (String(h['limit_' + k] || '').split(',').map(Number));
+  const tile = (label, v, unit, key, sub, low) => {
+    let c = '';
+    if (v != null && v !== '' && key) {
+      const [w, cr] = lim(key);
+      const bad = low ? v <= cr : v >= cr, warn = low ? v <= w : v >= w;
+      c = bad ? 'neg' : warn ? 'warnc' : 'pos';
+    }
+    return `<div class="card"><div class="k">${label}</div><div class="v ${c}">${v == null || v === '' ? '–' : v}<span class="sub" style="font-size:.55em">${unit}</span></div><div class="d">${sub}</div></div>`;
+  };
+  const states = {
+    ok: ['pos', '✓ All good: everything within safe limits'],
+    warn: ['warnc', '⚠ Data generation paused: ' + h.reason],
+    critical: ['neg', '⛔ Everything paused: ' + h.reason],
+    manual: ['warnc', '⏸ Everything paused by you'],
+  };
+  const [sc, st] = stale ? ['neg', 'Watchdog stopped responding'] : states[h.level] || ['', h.level];
+  const lims = k => { const [w, c] = lim(k); return `pause at ${w} · stop all at ${c}`; };
+  const paused = h.level === 'manual' || h.level === 'warn' || h.level === 'critical';
+  let body = `<div class="panel run">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div class="${sc}" style="font-weight:700;font-size:15px;flex:1;min-width:200px">${esc(st)}</div>
+      ${paused ? `<button class="btn" data-act="resume">▶ Resume</button>` : `<button class="btn" data-act="pause">⏸ Pause everything</button>`}
+    </div>
+    ${h.warn_now && h.level === 'ok' ? `<div class="sub" style="margin-top:6px">Watching: ${esc(h.warn_now)}</div>` : ''}
+    <div class="cards">
+      ${tile('CPU temperature', h.cpu_temp, '°C', 'cpu_temp', `${h.cpu_power ?? '–'} W · ${h.cpu_load ?? '–'}% load · ${lims('cpu_temp')}`)}
+      ${tile('GPU temperature', h.gpu_temp, '°C', 'gpu_temp', `${h.gpu_power ?? '–'} W · ${h.gpu_load ?? '–'}% load · ${lims('gpu_temp')}`)}
+      ${tile('GPU memory', h.gpu_mem_temp, '°C', 'gpu_mem_temp', `${h.gpu_mem_used_gb ?? '–'} GB VRAM in use`)}
+      ${tile('SSD temperature', h.ssd_temp, '°C', 'ssd_temp', lims('ssd_temp'))}
+      ${tile('Free RAM', h.ram_free_gb, ' GB', 'ram_free_gb', `of ${h.ram_total_gb} GB`, true)}
+      ${tile('Free disk (C:)', h.disk_free_gb, ' GB', 'disk_free_gb', 'data + checkpoints live here', true)}
+    </div>`;
+  if (h.history.length > 2) body += `<h4>Temperatures, last hour</h4><div class="chart small">${tempChart(h.history, viewW() - 64)}</div>`;
+  if (h.events.length) body += `<h4>Watchdog log</h4><div class="tbl" style="padding:6px 12px;font-size:12px;font-family:Consolas,monospace;line-height:1.7;overflow-wrap:anywhere">${h.events.map(e => `<div class="${/CRITICAL/.test(e) ? 'neg' : /WARNING|pause/.test(e) ? 'warnc' : 'sub'}">${esc(e)}</div>`).join('')}</div>`;
+  body += '</div>';
+  const bad = stale || h.level !== 'ok';
+  return section('sec:health', 'System health', `${h.level === 'ok' && !stale ? '✓ all good' : esc(stale ? 'not responding' : h.level)} · CPU ${h.cpu_temp ?? '–'}°C · GPU ${h.gpu_temp ?? '–'}°C`, body, bad);
+}
+
+function renderLab() {
+  if (!lab) return '<div class="empty">Loading…</div>';
+  const parts = [['datagen', 'Data generation on this PC'], ['watchdog', 'Watchdog (temperature safety)'], ['cloud_sync', 'Cloud sync (downloads GitHub data)'], ['auto_train', 'Automatic training']];
+  const on = parts.filter(([k]) => lab[k]).length;
+  const status = lab.busy ? (lab.busy === 'start' ? 'Starting…' : 'Stopping…') : on === parts.length ? 'Everything is running' : on === 0 ? 'The lab is stopped' : `Partly running (${on} of ${parts.length})`;
+  const top = `<div class="panel run">
+    <div class="now-head"><h3>${esc(status)}</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${labControls()}</div></div>
+    ${parts.map(([k, n]) => `<div class="now-row" style="cursor:default"><span class="dot ${lab[k] ? 'running' : 'stopped'}"></span><div class="now-main"><div class="now-t" style="${lab[k] ? '' : 'color:var(--muted);font-weight:500'}">${n}</div></div><span class="sub">${lab[k] ? 'on' : 'off'}</span></div>`).join('')}
+    ${lab.log && lab.log.length ? `<div class="sub" style="margin-top:10px;font-size:12px;white-space:pre-wrap">Last action:\n${esc(lab.log.join('\n'))}</div>` : ''}
+  </div>`;
+  return `<h2 style="margin-top:4px">Lab</h2>` + top + renderHealth() + renderDatagen() + renderTraining();
+}
+
+// ---- Actions (POST + custom header, which other websites can't send to this server) ----
+const post = url => fetch(url, { method: 'POST', headers: { 'X-Lab': '1' } }).catch(() => {});
+
+async function doAction(what) {
+  if (what === 'pause') {
+    if (!confirm('Pause data generation, GPU training and tournaments now?\n(Tournament games in progress may be lost on time.)')) return;
+    await post('/api/control/pause');
+  } else if (what === 'resume') {
+    await post('/api/control/resume');
+  } else if (what === 'lab-start') {
+    await post('/api/lab/start');
+  } else if (what === 'lab-stop') {
+    if (!confirm('Stop the lab?\n\nData generation pauses (it resumes where it left off), any tournament in progress is cut short (finished games are kept), and the watchdog, cloud sync and auto-training stop. The dashboard stays open.')) return;
+    const cloud = confirm('Also start a cloud batch on GitHub so data keeps coming in while the PC is off?\n\nOK = start one, Cancel = do not');
+    await post(`/api/lab/stop${cloud ? '?cloud=1' : ''}`);
+  }
+  setTimeout(poll, 600);
+}
+
+// ---- Rendering ----
+function renderHeader() {
+  const w = lab ? ['datagen', 'watchdog', 'cloud_sync', 'auto_train'] : [];
+  const on = w.filter(k => lab[k]).length;
+  const label = !lab ? '' : lab.busy ? (lab.busy === 'start' ? 'Starting…' : 'Stopping…') : on === w.length ? 'Lab running' : on === 0 ? 'Lab stopped' : `Lab partly running`;
+  const dot = !lab ? 'stopped' : lab.busy || on === w.length ? 'running' : on === 0 ? 'stopped' : 'finished';
+  setHtml($('#labstate'), lab ? `<span class="labstate" data-go="lab" title="Open the Lab tab"><span class="dot ${dot}"></span>${label}</span>` : '');
+  const liveN = runs.filter(r => r.status === 'running').length;
+  const unlocked = ach ? ach.items.filter(a => a.unlocked).length : 0;
+  const alerts = (health && (!health.updated || health.level !== 'ok' || health.now - health.updated > 30) ? 1 : 0) + trains.filter(t => t.state === 'failed').length * 0;
+  const badge = { tournaments: liveN ? `<span class="count">${liveN}</span>` : '', achievements: unlocked ? `<span class="count">${unlocked}</span>` : '', lab: alerts ? '<span class="count alert">!</span>' : '' };
+  setHtml($('#tabs'), TABS.map(([k, n, ic]) => `<button data-go="${k}" class="${k === tab ? 'active' : ''}"><span class="ic">${ic}</span><span>${n}</span>${badge[k] || ''}</button>`).join(''));
+}
+
+let loaded = false;
+
+function render() {
+  const m = versionModel();
+  renderHeader();
+  if (!loaded) { setHtml($('#view'), '<div class="empty">Loading…</div>'); return; }
+  const html = { overview: () => renderOverview(m), versions: () => renderVersions(m), tournaments: renderTournaments, achievements: () => renderAchievements(m), lab: renderLab }[tab]();
+  setHtml($('#view'), html);
+  document.title = (m.strongest ? `${m.strongest.perf.toFixed(0)} · ` : '') + 'Pawnstorm Lab';
+}
+
+let pollN = 0;
+async function poll() {
+  const j = async u => { try { return await (await fetch(u)).json(); } catch (e) { return undefined; } };
+  const n = pollN++;
+  try {
+    const [h, l, t, s, g, r, rt, a] = await Promise.all([
+      j('/api/health'), j('/api/lab'), j('/api/training'), j('/api/schedule'), j('/api/datagen'), j('/api/runs'),
+      j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined),
+    ]);
+    if (r === undefined) throw new Error('unreachable');
+    health = h ?? null; lab = l ?? null; schedule = s ?? null;
+    trains = (t ?? []).sort((x, y) => y.started - x.started);
+    gens = g ?? [];
+    gens.forEach(trackRate);
+    // Running generators first, then newest.
+    gens.sort((x, y) => ((y.state === 'running') - (x.state === 'running')) || (y.started - x.started));
+    runs = r;
+    if (rt) ratings = rt;
+    if (a) ach = a;
+    const want = runs.filter(x => x.status === 'running' || isOpen('run:' + x.id)).map(x => x.id);
+    const got = await Promise.all(want.map(id => j('/api/run/' + encodeURIComponent(id))));
+    details = {};
+    want.forEach((id, i) => { if (got[i]) details[id] = got[i]; });
+    $('#updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    loaded = true;
+    render();
+  } catch (e) {
+    $('#updated').innerHTML = '<span class="neg">Dashboard server not reachable</span>';
+  }
+}
+
+render();
 poll();
-setInterval(poll, 2000);
+// No point polling while the tab is hidden (e.g. phone screen off); catch up as soon as it is shown.
+setInterval(() => { if (!document.hidden) poll(); }, 2000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 </script>
 </body>
 </html>
