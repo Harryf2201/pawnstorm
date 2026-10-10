@@ -48,7 +48,7 @@ if (Get-Process trainer -ErrorAction SilentlyContinue) {
 }
 
 # 4. Local data generation (resumes from the same point next time).
-$dg = @(Get-Process pawnstorm-datagen -ErrorAction SilentlyContinue)
+$dg = @(Get-Process pawnstorm-datagen* -ErrorAction SilentlyContinue)
 if ($dg) {
     $dg | Stop-Process -Force
     foreach ($d in Get-ChildItem "$LabRoot\datagen" -Directory) {

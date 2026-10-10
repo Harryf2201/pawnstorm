@@ -109,7 +109,7 @@ function Read-Sensors {
 # Workload groups. Tournaments include every engine process fastchess started.
 function Get-Group($group) {
     switch ($group) {
-        'datagen' { @(Get-Process pawnstorm-datagen -ErrorAction SilentlyContinue) }
+        'datagen' { @(Get-Process pawnstorm-datagen* -ErrorAction SilentlyContinue) }
         'training' { @(Get-Process trainer -ErrorAction SilentlyContinue) }
         'tournaments' {
             $fc = @(Get-Process fastchess -ErrorAction SilentlyContinue)

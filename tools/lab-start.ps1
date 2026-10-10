@@ -1,7 +1,8 @@
 # Starts everything for a session: sensors, dashboard, watchdog, cloud sync, auto-training and
 # local data generation (resuming where it left off). Anything already running is left alone.
 # Usage: .\tools\lab-start.ps1            (or the "Pawnstorm Lab - Start" desktop shortcut)
-param([int]$DatagenThreads = 18, [int64]$DatagenTarget = 100000000, [string]$DatagenName = 'gen1-pesto-5k', [switch]$NoBrowser)
+# Local data generation: gen2 = self-play with the v0.8 network (gen1-pesto-5k was the hand-crafted-eval data).
+param([int]$DatagenThreads = 18, [int64]$DatagenTarget = 1000000000, [string]$DatagenName = 'gen2-v08-5k', [string]$DatagenExe = 'pawnstorm-datagen-gen2', [switch]$NoBrowser)
 
 . "$PSScriptRoot\paths.ps1"
 $ps = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File')
@@ -40,12 +41,12 @@ if (-not (Get-Process dashboard -ErrorAction SilentlyContinue)) {
 Start-Hidden 'cloud-sync.ps1' @('-IntervalSeconds', '120')
 
 # 5. Local self-play data generation (resumes counts and files).
-if (-not (Get-Process pawnstorm-datagen -ErrorAction SilentlyContinue)) {
+if (-not (Get-Process pawnstorm-datagen* -ErrorAction SilentlyContinue)) {
     $dir = "$LabRoot\datagen\$DatagenName"
     $have = 0
     if (Test-Path "$dir\status.txt") { $have = [int64](((Get-Content "$dir\status.txt" | Select-String '^positions=') -replace 'positions=', '')) }
     if ($have -lt $DatagenTarget) {
-        $p = Start-Process "$LabRoot\engines\pawnstorm-datagen.exe" -ArgumentList 'datagen', $DatagenThreads, $DatagenTarget, 5000, $dir `
+        $p = Start-Process "$LabRoot\engines\$DatagenExe.exe" -ArgumentList 'datagen', $DatagenThreads, $DatagenTarget, 5000, $dir `
             -RedirectStandardOutput "$dir\stdout.txt" -RedirectStandardError "$dir\stderr.txt" -WindowStyle Hidden -PassThru
         Start-Sleep 1
         $p.PriorityClass = 'BelowNormal'
