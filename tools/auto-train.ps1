@@ -85,7 +85,7 @@ function Train-Version($milestone, $data, $state) {
         Where-Object { $_ -ne $ver }
     $state.status = "rating $ver against Stockfish $lo/$hi and $($previous.Count) earlier versions"; Write-State $state
     & "$PSScriptRoot\match.ps1" -Name "$ver rating ($(Label $milestone) positions)" -Type gauntlet `
-        -Engines (@($ver, "sf:$lo", "sf:$hi") + $previous) -Rounds 15 -Concurrency 4 -Live `
+        -Engines (@($ver, "sf:$lo", "sf:$hi") + $previous) -Rounds 15 -Concurrency 6 -Live `
         -Notes "network trained on $(Label $milestone) positions, $sb rounds" | ForEach-Object { Log "  $_" }
     $state.next_version = [int]$state.next_version + 1
 }
