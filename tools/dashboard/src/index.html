@@ -194,6 +194,10 @@ function trackRate(g) {
 }
 
 function renderCloud(g) {
+  if (g.state === 'queued') {
+    return `<div class="panel run"><h3><span class="dot stopped"></span>Cloud batch ${esc(g.run_id)} <span class="pill">GitHub Actions</span> <span class="pill">queued</span></h3>
+      <div class="sub" style="margin-top:4px">Waiting for the current batch to finish (only one batch runs at a time) · <a href="${esc(g.url)}" target="_blank" style="color:var(--accent)">view on GitHub</a></div></div>`;
+  }
   const running = g.state === 'running';
   const total = g.jobs_total || 0, got = g.jobs_downloaded || 0;
   const elapsed = (running ? g.now : g.updated) - g.started;
@@ -511,17 +515,22 @@ function versions() {
 function renderRating() {
   const pts = versions();
   if (!pts.length) return `<div class="panel"><div class="rating-label">Pawnstorm rating</div><div class="rating">–</div><div class="sub">Run a rating gauntlet to get the first estimate.</div></div>`;
-  const cur = pts[pts.length - 1], prev = pts.length > 1 ? pts[pts.length - 2] : null;
+  // Headline = the strongest version (experiments that lose don't replace it);
+  // "change" = how much it gained over the best version before it.
+  const curIdx = pts.reduce((bi, p, i) => p.perf > pts[bi].perf ? i : bi, 0);
+  const cur = pts[curIdx];
+  const earlier = pts.slice(0, curIdx);
+  const prev = earlier.length ? earlier.reduce((b, p) => p.perf > b.perf ? p : b) : null;
   const best = Math.max(...pts.filter(p => p.status !== 'running').map(p => p.perf), -Infinity);
   const live = cur.status === 'running';
   const delta = prev ? cur.perf - prev.perf : null;
   return `<div class="hero">
     <div class="panel">
-      <div class="rating-label">Pawnstorm rating ${live ? '<span class="live-badge"><span class="dot running"></span>LIVE · updating as games finish</span>' : ''}</div>
+      <div class="rating-label">Pawnstorm rating · strongest version ${live ?'<span class="live-badge"><span class="dot running"></span>LIVE · updating as games finish</span>' : ''}</div>
       <div class="rating">${cur.perf.toFixed(0)} <small>±${cur.perf_err.toFixed(0)}</small></div>
       <div class="sub">${esc(cur.main)} · ${cur.games} rated games · all versions are rated together from every game played, so earlier versions keep refining</div>
       <div class="facts">
-        <div class="fact"><div class="k">Change vs previous version</div><div class="v delta ${cls(delta)}">${delta == null ? '–' : sign(delta)}</div></div>
+        <div class="fact"><div class="k">Gain over previous best</div><div class="v delta ${cls(delta)}">${delta == null ? '–' : sign(delta)}</div></div>
         <div class="fact"><div class="k">Best confirmed</div><div class="v">${best === -Infinity ? '–' : best.toFixed(0)}</div></div>
         <div class="fact"><div class="k">Versions rated</div><div class="v">${pts.length}</div></div>
         <div class="fact"><div class="k">Gain since first version</div><div class="v ${cls(cur.perf - pts[0].perf)}">${pts.length > 1 ? sign(cur.perf - pts[0].perf) : '–'}</div></div>

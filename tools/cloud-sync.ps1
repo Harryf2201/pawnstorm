@@ -82,7 +82,7 @@ function Sync-Run($run) {
     $queued = @($gen | Where-Object { $_.status -in 'queued', 'waiting', 'pending' }).Count
     $finished = @($gen | Where-Object { $_.status -eq 'completed' }).Count
     $failed = @($gen | Where-Object { $_.conclusion -in 'failure', 'cancelled', 'timed_out' }).Count
-    $state = if ($view.status -eq 'completed') { 'finished' } else { 'running' }
+    $state = if ($view.status -eq 'completed') { 'finished' } elseif ($view.status -in 'queued', 'pending', 'waiting', 'requested') { 'queued' } else { 'running' }
     $started = Unix $view.createdAt
     $updated = if ($state -eq 'running') { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() } else { Unix $view.updatedAt }
     # cloud-datagen.ps1 records the requested job length; GitHub's run API doesn't expose inputs.
