@@ -102,6 +102,7 @@ function Sync-Run($run) {
 
 Log 'cloud sync started'
 while ($true) {
+    Set-Content "$DataRoot\cloud-sync.heartbeat" (Get-Date -Format o)
     $stop = $false
     try {
         $runs = gh run list --workflow datagen.yml --limit 10 --json databaseId,status,conclusion,createdAt | ConvertFrom-Json

@@ -1,7 +1,7 @@
 # Starts everything for a session: sensors, dashboard, watchdog, cloud sync, auto-training and
 # local data generation (resuming where it left off). Anything already running is left alone.
 # Usage: .\tools\lab-start.ps1            (or the "Pawnstorm Lab - Start" desktop shortcut)
-param([int]$DatagenThreads = 18, [int64]$DatagenTarget = 100000000, [string]$DatagenName = 'gen1-pesto-5k')
+param([int]$DatagenThreads = 18, [int64]$DatagenTarget = 100000000, [string]$DatagenName = 'gen1-pesto-5k', [switch]$NoBrowser)
 
 . "$PSScriptRoot\paths.ps1"
 $ps = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File')
@@ -57,5 +57,5 @@ if (-not (Get-Process pawnstorm-datagen -ErrorAction SilentlyContinue)) {
 Start-Hidden 'auto-train.ps1'
 
 Start-Sleep 2
-Start-Process 'http://localhost:8000'
+if (-not $NoBrowser) { Start-Process 'http://localhost:8000' }
 "All started. Dashboard: http://localhost:8000"

@@ -92,6 +92,7 @@ function Train-Version($milestone, $data, $state) {
 
 Log 'auto-train started'
 while ($true) {
+    Set-Content "$TrainRoot\auto-train.heartbeat" (Get-Date -Format o)
     $state = Read-State
     try {
         $data = Get-Data
@@ -101,10 +102,13 @@ while ($true) {
         $state.positions = $data.total
         $state.next_milestone = $next
         if ($reached -and -not (Busy)) {
-            # If several milestones arrived at once (a cloud batch), train once on the largest.
-            $target = ($reached | Measure-Object -Maximum).Maximum
+            # One milestone at a time, smallest first: a cloud batch that jumps past several
+            # milestones produces a version for each of them (one after another), so the graph
+            # keeps a point at every step.
+            $target = ($reached | Measure-Object -Minimum).Minimum
             Train-Version $target $data $state
-            $state.done = (@($done) + ($reached | ForEach-Object { "$_" })) -join ','
+            $state.done = (@($done) + "$target") -join ','
+            $next = Milestones | Where-Object { "$_" -notin ($state.done -split ',') } | Select-Object -First 1
             $state.status = "waiting for $(Label $next) positions"
         } elseif ($reached) {
             $state.status = "milestone $(Label (($reached | Measure-Object -Maximum).Maximum)) reached, waiting for the current tournament/training to finish"

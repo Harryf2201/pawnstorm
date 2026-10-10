@@ -34,8 +34,24 @@ using System.Runtime.InteropServices;
 public static class Proc {
     [DllImport("ntdll.dll")] public static extern int NtSuspendProcess(IntPtr h);
     [DllImport("ntdll.dll")] public static extern int NtResumeProcess(IntPtr h);
+    [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PowerThrottling { public uint Version; public uint ControlMask; public uint StateMask; }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetProcessInformation(IntPtr h, int infoClass, ref PowerThrottling info, int size);
+    // Opt a process out of Windows 11 power throttling ("efficiency mode" / EcoQoS), which can
+    // move background work onto slow cores when the user is away.
+    public static bool NoThrottle(IntPtr h) {
+        var s = new PowerThrottling { Version = 1, ControlMask = 0x1 | 0x4, StateMask = 0 };
+        return SetProcessInformation(h, 4, ref s, Marshal.SizeOf(typeof(PowerThrottling)));
+    }
 }
 '@
+
+# Keep the PC from idle-sleeping while the lab runs (the display may still turn off).
+# ES_CONTINUOUS | ES_SYSTEM_REQUIRED; released automatically when this script stops.
+[void][Proc]::SetThreadExecutionState(0x80000001)
+$Unthrottled = [Collections.Generic.HashSet[int]]::new()
 
 function Log($msg) {
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
@@ -152,6 +168,13 @@ $pauseCount = 0
 $reason = ''
 
 while ($true) {
+    [void][Proc]::SetThreadExecutionState(0x80000001)
+    foreach ($g in 'datagen', 'training', 'tournaments') {
+        foreach ($p in Get-Group $g) {
+            if ($Unthrottled.Contains($p.Id)) { continue }
+            try { if ([Proc]::NoThrottle($p.Handle)) { [void]$Unthrottled.Add($p.Id) } } catch {}
+        }
+    }
     $s = Read-Sensors
     $control = (Get-Content $ControlFile -ErrorAction SilentlyContinue | Select-Object -First 1)
     $control = if ($control) { $control.Trim().ToLower() } else { 'auto' }

@@ -3,7 +3,8 @@
 # Usage: .\tools\lab-stop.ps1               stop now (a tournament in progress is cut short)
 #        .\tools\lab-stop.ps1 -StartCloud   also start a cloud batch first, to run while the PC is off
 #        .\tools\lab-stop.ps1 -WaitForTournaments   let running tournaments finish first
-param([switch]$StartCloud, [switch]$WaitForTournaments)
+#        -KeepDashboard   leave the dashboard running (used by the dashboard's own Stop button)
+param([switch]$StartCloud, [switch]$WaitForTournaments, [switch]$KeepDashboard)
 
 . "$PSScriptRoot\paths.ps1"
 
@@ -62,7 +63,9 @@ if ($dg) {
 # 5. Background helpers and the dashboard.
 Stop-Script 'cloud-sync.ps1'
 Stop-Script 'watchdog.ps1'
-Get-Process dashboard -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# Clear the heartbeat files at once so the dashboard shows the lab as stopped immediately.
+Remove-Item "$LabRoot\health\status.txt", "$LabRoot\datagen\cloud-sync.heartbeat", "$LabRoot\training\auto-train.heartbeat" -ErrorAction SilentlyContinue
+if (-not $KeepDashboard) { Get-Process dashboard -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
 
 $cloud = $null
 try {

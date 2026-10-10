@@ -18,6 +18,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -855,6 +856,8 @@ fn run_detail(id: &str, r: &RunState) -> String {
 struct App {
     root: PathBuf,
     runs: Mutex<HashMap<String, RunState>>,
+    /// lab-start / lab-stop script launched from the dashboard, while it runs.
+    lab_child: Mutex<Option<(String, std::process::Child)>>,
 }
 
 impl App {
@@ -1234,8 +1237,101 @@ impl App {
         o
     }
 
-    fn handle(&self, path: &str) -> (&'static str, String, &'static str) {
-        let path = path.split('?').next().unwrap_or("/");
+    /// Which parts of the lab are running, judged from the heartbeat files each part keeps fresh.
+    fn lab_state(&self) -> String {
+        let age = |p: PathBuf| now().saturating_sub(mtime(&p));
+        let watchdog = age(self.root.join("health").join("status.txt")) < 30;
+        let sync = age(self.root.join("datagen").join("cloud-sync.heartbeat")) < 300;
+        let autotrain = age(self.root.join("training").join("auto-train.heartbeat")) < 300;
+        let mut datagen = false;
+        for e in std::fs::read_dir(self.root.join("datagen")).into_iter().flatten().flatten() {
+            let st = e.path().join("status.txt");
+            let text = std::fs::read_to_string(&st).unwrap_or_default();
+            if !text.contains("source=cloud") && text.contains("state=running") && age(st) < 15 {
+                datagen = true;
+            }
+        }
+        let log = std::fs::read_to_string(self.root.join("lab-control.log")).unwrap_or_default();
+        let tail: Vec<String> = log.lines().rev().take(8).collect::<Vec<_>>().into_iter().rev().map(js).collect();
+        let busy = self.lab_busy();
+        format!(
+            "{{\"watchdog\":{watchdog},\"cloud_sync\":{sync},\"auto_train\":{autotrain},\"datagen\":{datagen},\"busy\":{},\"log\":[{}]}}",
+            js(&busy),
+            tail.join(",")
+        )
+    }
+
+    /// "start"/"stop" while a lab-start/lab-stop script launched from here is still running.
+    fn lab_busy(&self) -> String {
+        let mut child = self.lab_child.lock().unwrap();
+        if let Some((what, c)) = child.as_mut() {
+            if matches!(c.try_wait(), Ok(None)) {
+                return what.clone();
+            }
+        }
+        *child = None;
+        String::new()
+    }
+
+    /// Runs tools/lab-start.ps1 or tools/lab-stop.ps1 hidden, appending its output to lab-control.log.
+    fn lab_action(&self, what: &str, start_cloud: bool) -> String {
+        if !self.lab_busy().is_empty() {
+            return "{\"ok\":false,\"error\":\"already busy\"}".into();
+        }
+        let exe = std::env::current_exe().unwrap_or_default();
+        let Some(repo) = exe.ancestors().nth(3) else { return "{\"ok\":false}".into() };
+        let script = repo.join("tools").join(if what == "start" { "lab-start.ps1" } else { "lab-stop.ps1" });
+        let log_path = self.root.join("lab-control.log");
+        let mut log = match std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            Ok(f) => f,
+            Err(_) => return "{\"ok\":false}".into(),
+        };
+        let stamp = std::process::Command::new("powershell").args(["-NoProfile", "-Command", "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"]).output();
+        let stamp = stamp.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        let _ = writeln!(log, "--- {stamp} {what} requested from the dashboard{}", if start_cloud { " (with overnight cloud batch)" } else { "" });
+        let mut args = vec!["-NoProfile".to_string(), "-ExecutionPolicy".into(), "Bypass".into(), "-File".into(), script.display().to_string()];
+        if what == "start" {
+            args.push("-NoBrowser".into());
+        } else {
+            args.push("-KeepDashboard".into());
+            if start_cloud {
+                args.push("-StartCloud".into());
+            }
+        }
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args(&args).stdout(log.try_clone().map(Stdio::from).unwrap_or(Stdio::null())).stderr(log.try_clone().map(Stdio::from).unwrap_or(Stdio::null()));
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        match cmd.spawn() {
+            Ok(c) => {
+                *self.lab_child.lock().unwrap() = Some((what.to_string(), c));
+                "{\"ok\":true}".into()
+            }
+            Err(e) => format!("{{\"ok\":false,\"error\":{}}}", js(&e.to_string())),
+        }
+    }
+
+    /// `trusted` = POST with the X-Lab header. Browsers won't send a custom header cross-site
+    /// without a CORS preflight (which this server never approves), so other websites can't
+    /// trigger these actions.
+    fn handle(&self, method: &str, full_path: &str, trusted: bool) -> (&'static str, String, &'static str) {
+        let path = full_path.split('?').next().unwrap_or("/");
+        let query = full_path.split_once('?').map(|q| q.1).unwrap_or("");
+        let action = method == "POST" && trusted;
+        if path == "/api/lab" {
+            return ("200 OK", self.lab_state(), "application/json");
+        }
+        if let Some(what) = path.strip_prefix("/api/lab/") {
+            if !action {
+                return ("403 Forbidden", "{\"ok\":false}".into(), "application/json");
+            }
+            if matches!(what, "start" | "stop") {
+                return ("200 OK", self.lab_action(what, query.contains("cloud=1")), "application/json");
+            }
+        }
         if path == "/" || path == "/index.html" {
             return ("200 OK", INDEX.to_string(), "text/html; charset=utf-8");
         }
@@ -1270,6 +1366,9 @@ impl App {
             return ("200 OK", self.health(), "application/json");
         }
         if let Some(mode) = path.strip_prefix("/api/control/") {
+            if !action {
+                return ("403 Forbidden", "{\"ok\":false}".into(), "application/json");
+            }
             if matches!(mode, "pause" | "resume" | "auto") {
                 let ok = std::fs::write(self.root.join("health").join("control.txt"), mode).is_ok();
                 return ("200 OK", format!("{{\"ok\":{ok}}}"), "application/json");
@@ -1320,8 +1419,11 @@ fn serve(app: &App, mut stream: TcpStream) {
         }
     }
     let req = String::from_utf8_lossy(&buf[..len]);
-    let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
-    let (status, body, ctype) = app.handle(&path);
+    let mut first = req.split_whitespace();
+    let method = first.next().unwrap_or("GET").to_string();
+    let path = first.next().unwrap_or("/").to_string();
+    let trusted = req.lines().any(|l| l.to_ascii_lowercase().starts_with("x-lab:"));
+    let (status, body, ctype) = app.handle(&method, &path, trusted);
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
         body.len()
@@ -1340,7 +1442,7 @@ fn main() {
     });
     let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8000);
     let _ = std::fs::create_dir_all(root.join("runs"));
-    let app = Arc::new(App { root, runs: Mutex::new(HashMap::new()) });
+    let app = Arc::new(App { root, runs: Mutex::new(HashMap::new()), lab_child: Mutex::new(None) });
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("cannot bind port");
     println!("Pawnstorm Lab running at http://localhost:{port}");
     for stream in listener.incoming().flatten() {

@@ -24,6 +24,9 @@
   .pos { color: var(--good); } .neg { color: var(--bad); } .warnc { color: var(--warn); }
   .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; font: inherit; font-weight: 600; cursor: pointer; }
   .btn:hover { border-color: var(--accent); }
+  #labctl { display: flex; align-items: center; gap: 8px; }
+  #labctl .btn { padding: 5px 12px; }
+  .labstate { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: help; margin-right: 4px; }
   h2.sec { cursor: pointer; user-select: none; }
   h2.sec:hover { color: var(--text); }
   h2 .chev { display: inline-block; width: 16px; }
@@ -117,6 +120,7 @@
     <button data-tab="ach">Achievements <span id="ach-count" class="count"></span></button>
   </nav>
   <div id="updated"></div>
+  <div id="labctl"></div>
 </header>
 <main>
   <div id="dash">
@@ -246,10 +250,47 @@ function renderDatagen() {
 
 let trains = [], health = null;
 
+// Actions are POSTs with a custom header, which other websites can't send to this server.
+const act = url => fetch(url, { method: 'POST', headers: { 'X-Lab': '1' } }).catch(() => {});
+
 async function control(mode) {
   if (mode === 'pause' && !confirm('Pause data generation, GPU training and tournaments now?\n(Tournament games in progress may be lost on time.)')) return;
-  await fetch('/api/control/' + mode).catch(() => {});
+  await act('/api/control/' + mode);
   setTimeout(poll, 800);
+}
+
+let lab = null;
+
+async function labAction(what) {
+  let cloud = false;
+  if (what === 'stop') {
+    if (!confirm('Stop the lab?\n\nData generation pauses (it resumes where it left off), any tournament in progress is cut short (finished games are kept), and the watchdog, cloud sync and auto-training stop. The dashboard stays open.')) return;
+    cloud = confirm('Also start a cloud batch on GitHub so data keeps coming in while the PC is off?\n\nOK = yes, Cancel = no');
+  }
+  await act(`/api/lab/${what}${cloud ? '?cloud=1' : ''}`);
+  setTimeout(poll, 500);
+}
+
+function renderLab() {
+  if (!lab) return '';
+  const parts = [['datagen', 'Data generation'], ['watchdog', 'Watchdog'], ['cloud_sync', 'Cloud sync'], ['auto_train', 'Auto-training']];
+  const on = parts.filter(([k]) => lab[k]).length;
+  const tip = parts.map(([k, n]) => `${lab[k] ? '●' : '○'} ${n}`).join('\n') + (lab.log.length ? '\n\nLast action:\n' + lab.log.join('\n') : '');
+  let label, dot, btns = '';
+  if (lab.busy) {
+    label = lab.busy === 'start' ? 'Starting…' : 'Stopping…'; dot = 'running';
+  } else if (on === parts.length) {
+    label = 'Lab running'; dot = 'running';
+  } else if (on === 0) {
+    label = 'Lab stopped'; dot = 'stopped';
+  } else {
+    label = `Lab partly running (${on}/${parts.length})`; dot = 'finished';
+  }
+  if (!lab.busy) {
+    if (on < parts.length) btns += `<button class="btn" onclick="labAction('start')">▶ Start lab</button>`;
+    if (on > 0) btns += `<button class="btn" onclick="labAction('stop')">■ Stop lab</button>`;
+  }
+  return `<span class="labstate" title="${esc(tip)}"><span class="dot ${dot}"></span>${label}</span>${btns}`;
 }
 
 function renderHealth() {
@@ -371,6 +412,8 @@ function renderTraining() {
 async function poll() {
   try {
     health = await (await fetch('/api/health')).json().catch(() => null);
+    lab = await (await fetch('/api/lab')).json().catch(() => null);
+    $('#labctl').innerHTML = renderLab();
     trains = await (await fetch('/api/training')).json().catch(() => []);
     schedule = await (await fetch('/api/schedule')).json().catch(() => null);
     trains.sort((a, b) => b.started - a.started);
