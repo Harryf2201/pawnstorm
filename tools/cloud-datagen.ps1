@@ -7,7 +7,9 @@ param(
     [ValidateRange(10, 340)][int]$Minutes = 330,
     [int]$SoftNodes = 5000,
     # Follow-up batches GitHub starts by itself after this one (e.g. -Chain 1 = two batches back to back).
-    [ValidateRange(0, 3)][int]$Chain = 0
+    [ValidateRange(0, 3)][int]$Chain = 0,
+    # classical = gen1 data (hand-crafted eval); nnue = gen2 data from the network in nets\default.bin
+    [ValidateSet('classical', 'nnue')][string]$Eval = 'classical'
 )
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\paths.ps1"
@@ -27,7 +29,7 @@ try {
         return
     }
     $before = @(gh run list --workflow datagen.yml --limit 1 --json databaseId | ConvertFrom-Json).databaseId
-    gh workflow run datagen.yml -f jobs=$Jobs -f minutes=$Minutes -f soft_nodes=$SoftNodes -f chain=$Chain
+    gh workflow run datagen.yml -f jobs=$Jobs -f minutes=$Minutes -f soft_nodes=$SoftNodes -f chain=$Chain -f eval=$Eval
     if ($LASTEXITCODE -ne 0) { throw "GitHub refused to start the workflow (see the message above)." }
     # Wait for the new run to appear.
     $run = $null
@@ -39,7 +41,7 @@ try {
     if (-not $run) { throw "Started the workflow but couldn't find its run yet; check the Actions tab." }
     $dir = "$LabRoot\datagen\cloud-$($run.databaseId)"
     New-Item -ItemType Directory -Force $dir | Out-Null
-    [IO.File]::WriteAllLines("$dir\launch.txt", [string[]]@("jobs=$Jobs", "minutes=$Minutes", "soft_nodes=$SoftNodes"))
+    [IO.File]::WriteAllLines("$dir\launch.txt", [string[]]@("jobs=$Jobs", "minutes=$Minutes", "soft_nodes=$SoftNodes", "eval=$Eval"))
     "Started cloud batch: $Jobs jobs x $Minutes min$(if ($Chain) { ", then $Chain more batch(es) back to back" }) -> $($run.url)"
     "The dashboard shows it once tools\cloud-sync.ps1 is running (it downloads data as jobs finish)."
 } finally {

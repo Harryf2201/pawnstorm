@@ -18,6 +18,9 @@ on:
       chain:
         description: "Follow-up batches to start automatically after this one (only if every job succeeds)"
         default: "0"
+      eval:
+        description: "classical = hand-crafted eval (gen1 data); nnue = the network in nets/default.bin (gen2 data)"
+        default: "classical"
 
 # Only one batch at a time; a second request waits for the first to finish.
 concurrency:
@@ -52,10 +55,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build (classical eval, same as the local generator)
+      - name: Build (${{ inputs.eval }} evaluation)
         run: |
           # An empty network file makes the engine use its hand-crafted evaluation.
-          : > nets/default.bin
+          if [ "${{ inputs.eval }}" != "nnue" ]; then : > nets/default.bin; fi
+          ls -l nets/default.bin
           cargo build --release -p pawnstorm
           ./target/release/pawnstorm perft
 
@@ -99,4 +103,4 @@ jobs:
           remaining=$(( ${{ inputs.chain }} - 1 ))
           echo "starting the next batch ($remaining more after it)"
           gh workflow run datagen.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" \
-            -f jobs=${{ inputs.jobs }} -f minutes=${{ inputs.minutes }} -f soft_nodes=${{ inputs.soft_nodes }} -f chain=$remaining
+            -f jobs=${{ inputs.jobs }} -f minutes=${{ inputs.minutes }} -f soft_nodes=${{ inputs.soft_nodes }} -f chain=$remaining -f eval=${{ inputs.eval }}

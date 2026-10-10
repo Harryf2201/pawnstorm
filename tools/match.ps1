@@ -68,6 +68,8 @@ $format = if ($Book -like '*.epd') { 'epd' } else { 'pgn' }
 $fcArgs += '-each', "tc=$TC", "option.Hash=$Hash"
 $fcArgs += '-openings', "file=$bookPath", "format=$format", 'order=random'
 $fcArgs += '-rounds', $Rounds, '-games', 2, '-repeat', '-concurrency', $Concurrency, '-recover'
+# Print results (incl. SPRT LLR) every 10 games so the dashboard can follow along.
+$fcArgs += '-ratinginterval', 10
 $fcArgs += '-pgnout', "file=$dir\games.pgn"
 if ($Type -eq 'gauntlet') { $fcArgs += '-tournament', 'gauntlet' }
 if ($Type -eq 'sprt') {
