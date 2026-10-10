@@ -1,0 +1,3 @@
+[build]
+# Use every instruction the local CPU supports (AVX2, BMI2/PEXT, ...).
+rustflags = ["-C", "target-cpu=native"]
