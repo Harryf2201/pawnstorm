@@ -245,6 +245,8 @@ struct RunState {
     verdict: String,
     finished: bool,
     last_activity: u64,
+    /// (rating, ±95% error, derived from an earlier run's rating rather than a fixed anchor)
+    rating: Option<(f64, f64, bool)>,
 }
 
 fn after<'a>(tokens: &[&'a str], key: &str) -> Option<&'a str> {
@@ -403,9 +405,9 @@ struct Summary {
     w: f64,
     d: f64,
     l: f64,
-    perf: Option<f64>,
 }
 
+/// The main engine's overall W/D/L plus W/D/L against each opponent.
 fn summarize(r: &RunState) -> (Summary, BTreeMap<String, [f64; 3]>) {
     let main = &r.meta.main;
     let mut per: BTreeMap<String, [f64; 3]> = BTreeMap::new();
@@ -416,49 +418,95 @@ fn summarize(r: &RunState) -> (Summary, BTreeMap<String, [f64; 3]>) {
         e[if s == 1.0 { 0 } else if s == 0.5 { 1 } else { 2 }] += 1.0;
     }
     let (mut w, mut d, mut l) = (0.0, 0.0, 0.0);
-    let mut anchored = Vec::new();
-    for (opp, c) in &per {
+    for c in per.values() {
         w += c[0];
         d += c[1];
         l += c[2];
-        if let Some((_, a)) = r.meta.anchors.iter().find(|(n, _)| n == opp) {
-            anchored.push((*a, c[0] + c[1] + c[2], c[0] + c[1] / 2.0));
-        }
     }
-    (Summary { w, d, l, perf: perf_rating(&anchored) }, per)
+    (Summary { w, d, l }, per)
 }
 
-/// Performance rating: the rating R at which the expected score against all anchored
-/// opponents equals the actual score. Entries are (opponent rating, games, points).
-fn perf_rating(opps: &[(f64, f64, f64)]) -> Option<f64> {
-    let games: f64 = opps.iter().map(|o| o.1).sum();
-    let points: f64 = opps.iter().map(|o| o.2).sum();
+/// Performance rating with a 95% error margin: the rating R at which the expected score
+/// against all rated opponents equals the actual score. Entries are (opponent rating, [w, d, l]).
+fn perf_rating(opps: &[(f64, [f64; 3])]) -> Option<(f64, f64)> {
+    let (w, d, l) = opps.iter().fold((0.0, 0.0, 0.0), |a, o| (a.0 + o.1[0], a.1 + o.1[1], a.2 + o.1[2]));
+    let games = w + d + l;
     if games == 0.0 {
         return None;
     }
+    let points = w + d / 2.0;
+    let p = points / games;
+    let sd = ((w * (1.0 - p).powi(2) + d * (0.5 - p).powi(2) + l * p.powi(2)) / games * games).sqrt().max(0.5);
     let hi_a = opps.iter().map(|o| o.0).fold(f64::MIN, f64::max);
     let lo_a = opps.iter().map(|o| o.0).fold(f64::MAX, f64::min);
-    // Treat a perfect score as half a point short so the estimate stays finite.
-    let points = points.clamp(0.5, games - 0.5);
-    let expected = |r: f64| opps.iter().map(|&(a, n, _)| n / (1.0 + 10f64.powf((a - r) / 400.0))).sum::<f64>();
-    let (mut lo, mut hi) = (lo_a - 1000.0, hi_a + 1000.0);
-    for _ in 0..60 {
-        let mid = (lo + hi) / 2.0;
-        if expected(mid) < points {
-            lo = mid;
-        } else {
-            hi = mid;
+    let solve = |pts: f64| {
+        // Keep perfect scores half a point short so the estimate stays finite.
+        let pts = pts.clamp(0.5, (games - 0.5).max(0.5));
+        let expected = |r: f64| opps.iter().map(|o| (o.1[0] + o.1[1] + o.1[2]) / (1.0 + 10f64.powf((o.0 - r) / 400.0))).sum::<f64>();
+        let (mut lo, mut hi) = (lo_a - 1500.0, hi_a + 1500.0);
+        for _ in 0..60 {
+            let mid = (lo + hi) / 2.0;
+            if expected(mid) < pts {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo + hi) / 2.0
+    };
+    let r = solve(points);
+    let err = (solve(points + 1.96 * sd) - solve(points - 1.96 * sd)) / 2.0;
+    Some((r, err))
+}
+
+/// Rates every run in creation order. Opponents are rated either by a fixed anchor from meta.txt
+/// (e.g. Elo-limited Stockfish) or by a rating an earlier run established for that engine, so
+/// version-vs-version tests also move the rating.
+fn compute_ratings(runs: &mut HashMap<String, RunState>, ids_by_age: &[String]) {
+    let mut known: HashMap<String, (f64, f64)> = HashMap::new();
+    for id in ids_by_age {
+        let r = runs.get_mut(id).unwrap();
+        let (_, per) = summarize(r);
+        let mut rated = Vec::new();
+        let mut anchor_err2 = 0.0;
+        let mut games = 0.0;
+        let mut derived = false;
+        for (opp, c) in &per {
+            let n = c[0] + c[1] + c[2];
+            if let Some((_, a)) = r.meta.anchors.iter().find(|(name, _)| name == opp) {
+                rated.push((*a, *c));
+            } else if let Some(&(a, e)) = known.get(opp) {
+                rated.push((a, *c));
+                anchor_err2 += e * e * n;
+                derived = true;
+            } else {
+                continue;
+            }
+            games += n;
+        }
+        r.rating = perf_rating(&rated).map(|(v, e)| {
+            // Fold in the uncertainty of opponents whose ratings were themselves estimated.
+            let e = if games > 0.0 { (e * e + anchor_err2 / games).sqrt() } else { e };
+            (v, e, derived)
+        });
+        if let Some((v, e, _)) = r.rating {
+            if !r.meta.main.is_empty() && r.finished {
+                known.insert(r.meta.main.clone(), (v, e));
+            }
         }
     }
-    Some((lo + hi) / 2.0)
 }
 
 fn run_brief(id: &str, r: &RunState) -> String {
     let (s, _) = summarize(r);
     let (elo, err, ..) = elo_stats(s.w, s.d, s.l);
     let llr = r.llr.as_ref().map_or("null".into(), |v| num(v[0]));
+    let (perf, perf_err, derived) = match r.rating {
+        Some((v, e, d)) => (num(v), num(e), d),
+        None => ("null".into(), "null".into(), false),
+    };
     format!(
-        "{{\"id\":{},\"name\":{},\"type\":{},\"tc\":{},\"status\":{},\"games\":{},\"total\":{},\"created\":{},\"main\":{},\"elo\":{},\"err\":{},\"perf\":{},\"llr\":{},\"verdict\":{}}}",
+        "{{\"id\":{},\"name\":{},\"type\":{},\"tc\":{},\"status\":{},\"games\":{},\"total\":{},\"created\":{},\"ended\":{},\"main\":{},\"elo\":{},\"err\":{},\"perf\":{},\"perf_err\":{},\"derived\":{},\"llr\":{},\"verdict\":{}}}",
         js(id),
         js(&r.meta.name),
         js(&r.meta.kind),
@@ -467,10 +515,13 @@ fn run_brief(id: &str, r: &RunState) -> String {
         r.games.len(),
         r.meta.total,
         r.meta.created,
+        r.last_activity,
         js(&r.meta.main),
         num(elo),
         num(err),
-        s.perf.map_or("null".into(), num),
+        perf,
+        perf_err,
+        derived,
         llr,
         js(&r.verdict)
     )
@@ -535,8 +586,7 @@ fn run_detail(id: &str, r: &RunState) -> String {
     o.push_str("\"opponents\":[");
     for (i, (opp, c)) in per.iter().enumerate() {
         let (e, er, _, _, _, sc) = elo_stats(c[0], c[1], c[2]);
-        let anchor = r.meta.anchors.iter().find(|(n, _)| n == opp).map_or("null".into(), |(_, a)| num(*a));
-        let _ = write!(
+        let anchor = r.meta.anchors.iter().find(|(n, _)| n == opp).map_or("null".into(), |(_, a)| num(*a));        let _ = write!(
             o,
             "{}{{\"name\":{},\"anchor\":{},\"w\":{},\"d\":{},\"l\":{},\"elo\":{},\"err\":{},\"score\":{}}}",
             if i > 0 { "," } else { "" },
@@ -703,8 +753,181 @@ impl App {
         for id in &ids {
             runs.entry(id.clone()).or_default().refresh(&dir.join(id));
         }
-        ids.sort_by_key(|id| std::cmp::Reverse(runs[id].meta.created));
+        ids.sort_by_key(|id| runs[id].meta.created);
+        compute_ratings(&mut runs, &ids);
+        ids.reverse();
         ids
+    }
+
+    /// Milestones reached so far plus locked goals still ahead, as JSON.
+    fn achievements(&self) -> String {
+        let mut ids = self.refresh_all();
+        ids.reverse(); // oldest first
+        let runs = self.runs.lock().unwrap();
+        struct Ach {
+            icon: &'static str,
+            title: String,
+            desc: String,
+            date: u64,
+            run: String,
+            tier: &'static str,
+        }
+        let mut got: Vec<Ach> = Vec::new();
+        let mut have = std::collections::HashSet::new();
+        let mut unlock = |key: String, a: Ach, got: &mut Vec<Ach>| {
+            if have.insert(key) {
+                got.push(a);
+            }
+        };
+
+        let mut total_games = 0usize;
+        let mut sprt_passes = 0;
+        const RATING_STEPS: [f64; 9] = [2000.0, 2200.0, 2400.0, 2600.0, 2800.0, 3000.0, 3200.0, 3400.0, 3600.0];
+        const GAME_STEPS: [usize; 4] = [100, 1000, 10_000, 100_000];
+        for id in &ids {
+            let r = &runs[id];
+            let main = &r.meta.main;
+            let date = if r.last_activity > 0 { r.last_activity } else { r.meta.created };
+            let finished = r.finished || status(r) == "stopped";
+
+            // First game won against each opponent (counts as soon as it happens, even mid-tournament).
+            for g in &r.games {
+                if result_for(g, main) == Some(1.0) {
+                    let opp = if &g.white == main { &g.black } else { &g.white };
+                    let strong = ["stockfish", "dragon", "plentychess", "rubichess", "lc0"].contains(&opp.to_lowercase().as_str());
+                    unlock(
+                        format!("win:{opp}"),
+                        Ach {
+                            icon: if strong { "🏆" } else { "⚔️" },
+                            title: format!("First win vs {opp}"),
+                            desc: format!("{main} won a game against {opp}{}", g.reason.is_empty().then(String::new).unwrap_or_else(|| format!(" ({})", g.reason))),
+                            date,
+                            run: r.meta.name.clone(),
+                            tier: if strong { "gold" } else { "bronze" },
+                        },
+                        &mut got,
+                    );
+                }
+            }
+
+            // Outscored an opponent over a whole finished match.
+            if finished {
+                let (_, per) = summarize(r);
+                for (opp, c) in &per {
+                    let n = c[0] + c[1] + c[2];
+                    let score = (c[0] + c[1] / 2.0) / n.max(1.0);
+                    if n >= 10.0 && score > 0.5 {
+                        unlock(
+                            format!("match:{opp}"),
+                            Ach {
+                                icon: "🥇",
+                                title: format!("Beat {opp} in a match"),
+                                desc: format!("Scored {:.0}% over {} games (+{} ={} −{})", score * 100.0, n, c[0], c[1], c[2]),
+                                date,
+                                run: r.meta.name.clone(),
+                                tier: "silver",
+                            },
+                            &mut got,
+                        );
+                    }
+                }
+                if let Some((v, e, _)) = r.rating {
+                    for step in RATING_STEPS {
+                        if v >= step {
+                            unlock(
+                                format!("rating:{step}"),
+                                Ach {
+                                    icon: "📈",
+                                    title: format!("Reached {step:.0} rating"),
+                                    desc: format!("{main} measured at {v:.0} ±{e:.0}"),
+                                    date,
+                                    run: r.meta.name.clone(),
+                                    tier: if step >= 3000.0 { "gold" } else { "silver" },
+                                },
+                                &mut got,
+                            );
+                        }
+                    }
+                }
+            }
+
+            if r.verdict.contains("H1") {
+                sprt_passes += 1;
+                if sprt_passes == 1 || sprt_passes == 10 || sprt_passes == 50 {
+                    unlock(
+                        format!("sprt:{sprt_passes}"),
+                        Ach {
+                            icon: "✅",
+                            title: if sprt_passes == 1 { "First improvement proven".into() } else { format!("{sprt_passes} improvements proven") },
+                            desc: format!("Passed SPRT: {}", r.meta.name),
+                            date,
+                            run: r.meta.name.clone(),
+                            tier: "silver",
+                        },
+                        &mut got,
+                    );
+                }
+            }
+
+            let before = total_games;
+            total_games += r.games.iter().filter(|g| result_for(g, main).is_some()).count();
+            for step in GAME_STEPS {
+                if before < step && total_games >= step {
+                    unlock(
+                        format!("games:{step}"),
+                        Ach {
+                            icon: "♟️",
+                            title: format!("{step} games played"),
+                            desc: "Across all tests".into(),
+                            date,
+                            run: r.meta.name.clone(),
+                            tier: "bronze",
+                        },
+                        &mut got,
+                    );
+                }
+            }
+        }
+
+        // Goals still ahead.
+        let mut locked: Vec<(String, String, String)> = Vec::new();
+        for step in RATING_STEPS {
+            if !got.iter().any(|a| a.title == format!("Reached {step:.0} rating")) {
+                locked.push(("📈".into(), format!("Reach {step:.0} rating"), "Confirmed by a finished rating test".into()));
+            }
+        }
+        for opp in ["stockfish", "dragon", "plentychess", "rubichess"] {
+            if !got.iter().any(|a| a.title == format!("First win vs {opp}")) {
+                locked.push(("🏆".into(), format!("Win a game vs {opp}"), "Full-strength engine".into()));
+            }
+        }
+        for step in GAME_STEPS {
+            if total_games < step {
+                locked.push(("♟️".into(), format!("{step} games played"), format!("{total_games} so far")));
+            }
+        }
+
+        got.sort_by_key(|a| std::cmp::Reverse(a.date));
+        let mut o = String::from("{\"unlocked\":[");
+        for (i, a) in got.iter().enumerate() {
+            let _ = write!(
+                o,
+                "{}{{\"icon\":{},\"title\":{},\"desc\":{},\"date\":{},\"run\":{},\"tier\":{}}}",
+                if i > 0 { "," } else { "" },
+                js(a.icon),
+                js(&a.title),
+                js(&a.desc),
+                a.date,
+                js(&a.run),
+                js(a.tier)
+            );
+        }
+        o.push_str("],\"locked\":[");
+        for (i, (icon, t, d)) in locked.iter().enumerate() {
+            let _ = write!(o, "{}{{\"icon\":{},\"title\":{},\"desc\":{}}}", if i > 0 { "," } else { "" }, js(icon), js(t), js(d));
+        }
+        o.push_str("]}");
+        o
     }
 
     fn handle(&self, path: &str) -> (&'static str, String, &'static str) {
@@ -717,6 +940,9 @@ impl App {
             let runs = self.runs.lock().unwrap();
             let items: Vec<String> = ids.iter().map(|id| run_brief(id, &runs[id])).collect();
             return ("200 OK", format!("[{}]", items.join(",")), "application/json");
+        }
+        if path == "/api/achievements" {
+            return ("200 OK", self.achievements(), "application/json");
         }
         if let Some(id) = path.strip_prefix("/api/run/") {
             let id = id.replace("%20", " ");
