@@ -12,7 +12,7 @@ param(
     [double]$Wdl = 0.4,
     [switch]$NoGauntlet
 )
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'   # native tools write progress to stderr
 . "$PSScriptRoot\paths.ps1"
 
 # Data: every generator folder that has positions, unless given explicitly.
