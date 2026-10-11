@@ -12,7 +12,8 @@ if (-not $OracleHost) { throw 'Set $OracleHost and $OracleKey in tools\engines.l
 $dir = "$LabRoot\datagen\$Name"
 $events = "$LabRoot\datagen\oracle-events.log"
 New-Item -ItemType Directory -Force $dir | Out-Null
-$ssh = @('-i', $OracleKey, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20')
+# Keepalives make a dead connection fail after ~1 minute instead of hanging the sync forever.
+$ssh = @('-i', $OracleKey, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4')
 function Log($m) { Add-Content $events "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" -Encoding utf8 }
 
 function Sync-Once {
