@@ -940,7 +940,7 @@ function renderCloud(g) {
   const projected = perJob ? perJob * total : null;
   const rate = perJob ? perJob * total / ((g.minutes || 330) * 60) : null;
   const soFar = running && perJob ? Math.round(perJob * total * Math.min(1, elapsed / ((g.minutes || 330) * 60))) : null;
-  const kind = g.eval === 'nnue' ? 'gen2 (v0.8 network)' : 'gen1 (classical eval)';
+  const kind = ({ 1: 'gen1 (classical eval)', 2: 'gen2 (v0.8 network)', 3: 'gen3 (v1.3 network)' })[g.gen || (g.eval === 'nnue' ? 2 : 1)] || 'gen' + g.gen;
   const state = running ? 'running' : 'finished';
   return `<div class="panel run">
     <h3><span class="dot ${state}"></span>Cloud batch ${esc(g.run_id)} <span class="pill">GitHub Actions</span> <span class="pill">${state}</span></h3>

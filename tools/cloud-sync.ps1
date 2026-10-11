@@ -130,11 +130,13 @@ function Sync-Run($run) {
     if (Test-Path "$dir\launch.txt") { $minutes = [int]((Get-Content "$dir\launch.txt" | Select-String '^minutes=').ToString().Split('=')[1]) }
     $eval = 'classical'
     if (Test-Path "$dir\launch.txt") { $e = Get-Content "$dir\launch.txt" | Select-String '^eval='; if ($e) { $eval = $e.ToString().Split('=')[1] } }
+    $generation = if ($eval -eq 'nnue') { 2 } else { 1 }
+    if (Test-Path "$dir\launch.txt") { $g = Get-Content "$dir\launch.txt" | Select-String '^gen='; if ($g) { $generation = $g.ToString().Split('=')[1] } }
     $lines = @(
         "source=cloud", "state=$state", "run_id=$id", "url=$($view.url)", "started=$started", "updated=$updated",
         "jobs_total=$($gen.Count)", "jobs_running=$running", "jobs_queued=$queued", "jobs_done=$finished", "jobs_failed=$failed",
         "jobs_downloaded=$($done.Count)", "minutes=$minutes", "soft_nodes=5000", "target=0",
-        "cpu=$($cpus.Keys -join ' / ')", "warning=$warning", "eval=$eval", "est_per_job=$(Estimate-PerJob $eval $minutes)"
+        "cpu=$($cpus.Keys -join ' / ')", "warning=$warning", "eval=$eval", "gen=$generation", "est_per_job=$(Estimate-PerJob $eval $minutes)"
     )
     foreach ($k in $sum.Keys) { $lines += "$k=$($sum[$k])" }
     [IO.File]::WriteAllLines("$dir\status.tmp", [string[]]$lines)
