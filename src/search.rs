@@ -582,7 +582,7 @@ impl Searcher {
                     let mut nb = *b;
                     nb.make_move(mv);
                     self.tt.prefetch(nb.hash);
-                    self.nnue_update(b, mv, ply);
+                    self.nnue_update(b, &nb, mv, ply);
                     self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
                     self.hashes.push(nb.hash);
                     let mut s = -self.qsearch(&nb, -pc_beta, -pc_beta + 1, ply + 1);

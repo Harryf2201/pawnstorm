@@ -21,16 +21,16 @@ const QB: i32 = 64;
 /// the board is mirrored left-right when that king is on the e-h files. Must match the trainer.
 #[rustfmt::skip]
 const BUCKET_LAYOUT: [usize; 32] = [
-    0, 1, 2, 3,
-    4, 4, 5, 5,
-    6, 6, 6, 6,
-    7, 7, 7, 7,
-    8, 8, 8, 8,
-    8, 8, 8, 8,
-    9, 9, 9, 9,
-    9, 9, 9, 9,
+    0, 0, 1, 1,
+    2, 2, 2, 2,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
 ];
-pub const INPUT_BUCKETS: usize = 10;
+pub const INPUT_BUCKETS: usize = 4;
 
 /// (bucket, file flip) for a king on `ksq`, given in its own side's orientation.
 #[inline(always)]

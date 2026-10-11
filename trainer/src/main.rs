@@ -50,7 +50,7 @@ fn main() {
     let wdl_weight: f32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(0.4);
     let hidden: usize = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(512);
     let buckets: usize = args.get(7).and_then(|s| s.parse().ok()).unwrap_or(1);
-    // "768" = plain piece-square inputs; "kb10" = 10 mirrored king buckets (see BUCKET_LAYOUT).
+    // "768" = plain piece-square inputs; "kb10" / "kb4" = 10 / 4 mirrored king buckets.
     let inputs = args.get(8).cloned().unwrap_or_else(|| "768".into());
 
     let schedule = TrainingSchedule {
@@ -79,11 +79,11 @@ fn main() {
         let mut trainer = ValueTrainerBuilder::default()
             .dual_perspective()
             .optimiser(AdamW)
-            .inputs(ChessBucketsMirrored::new(KING_BUCKETS))
+            .inputs(ChessBucketsMirrored::new(layout))
             .save_format(&[
                 SavedFormat::id("l0w")
                     .transform(|store, weights| {
-                        let factoriser = store.get("l0f").values.f32().repeat(NUM_KING_BUCKETS);
+                        let factoriser = store.get("l0f").values.f32().repeat(num_kb);
                         weights.into_iter().zip(factoriser).map(|(a, b)| a + b).collect()
                     })
                     .round()
@@ -95,8 +95,8 @@ fn main() {
             .loss_fn(|output, target| output.sigmoid().squared_error(target))
             .build(|builder, stm_inputs, ntm_inputs| {
                 let l0f = builder.new_weights("l0f", Shape::new(hidden, 768), InitSettings::Zeroed);
-                let mut l0 = builder.new_affine("l0", 768 * NUM_KING_BUCKETS, hidden);
-                l0.weights = l0.weights + l0f.repeat(NUM_KING_BUCKETS);
+                let mut l0 = builder.new_affine("l0", 768 * num_kb, hidden);
+                l0.weights = l0.weights + l0f.repeat(num_kb);
                 let l1 = builder.new_affine("l1", 2 * hidden, 1);
                 let stm_hidden = l0.forward(stm_inputs).screlu();
                 let ntm_hidden = l0.forward(ntm_inputs).screlu();
