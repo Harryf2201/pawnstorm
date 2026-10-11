@@ -37,7 +37,9 @@ foreach ($spec in $Engines) {
     } elseif ($Known.ContainsKey($spec)) {
         $n = $spec
         $fcArgs += '-engine', "cmd=$($Known[$spec])", "name=$n"
-    } elseif (Test-Path "$Root\engines\$spec.nnue") {
+    } elseif ((Test-Path "$Root\engines\$spec.nnue") -and -not (Test-Path "$Root\engines\$spec.exe")) {
+        # (A version with its own build, e.g. a different network architecture, always runs its .exe:
+        # the shared build can only read standard networks.)
         # A network-only version: the shared NNUE build loads this version's network file.
         $n = $spec
         $fcArgs += '-engine', "cmd=$Root\engines\pawnstorm-nnue.exe", "name=$n", "option.EvalFile=$Root\engines\$spec.nnue"
