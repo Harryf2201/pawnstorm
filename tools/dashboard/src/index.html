@@ -14,6 +14,8 @@
     --sq-light: #e8dcc0; --sq-dark: #a7825a; --hl: rgba(255, 214, 10, .45);
   }
   * { box-sizing: border-box; }
+  .vbig-title { font-size: 15px; font-weight: 500; color: var(--muted); margin-left: 10px; }
+  .vtitle-sub { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 8px; }
   /* Championship tab */
   .cl-wrap { overflow-x: auto; }
   table.cl, table.xt { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
@@ -331,7 +333,7 @@ function trackRate(g) {
 
 // Engine names -> friendly version names, from versions.ini (served by /api/versions).
 // "Pawnstorm-0.1", "pawnstorm-v0.1" and every other name listed for a version are the same engine.
-let catalog = [], aliasMap = {}, aliasRe = null;
+let catalog = [], aliasMap = {}, aliasRe = null, titleMap = {};
 const ekey = n => {
   const s = String(n).toLowerCase().replace(/[^a-z0-9.]/g, '');
   let o = '';
@@ -339,7 +341,7 @@ const ekey = n => {
   return o;
 };
 function setCatalog(c) {
-  catalog = c; aliasMap = {};
+  catalog = c; aliasMap = {}; titleMap = Object.fromEntries(c.map(v => [v.name, v.title || '']));
   const raw = [];
   c.forEach(v => { aliasMap[ekey(v.name)] = v.name; v.engines.forEach(e => { aliasMap[ekey(e)] = v.name; raw.push([e, v.name]); }); });
   raw.sort((a, b) => b[0].length - a[0].length);
@@ -348,14 +350,21 @@ function setCatalog(c) {
 }
 const canon = n => String(n).replace(/^pawnstorm[-_ ]?v?(\d)/i, 'pawnstorm-v$1');
 /// Friendly name for one engine name; names not in the catalog just lose the "pawnstorm-" prefix.
-const short = n => aliasMap[ekey(n)] || canon(n).replace(/^pawnstorm-/i, '');
+/// Display names for the other engines we play.
+const OTHER_ENGINES = { stockfish: 'Stockfish 18', rubichess: 'RubiChess', dragon: 'Komodo Dragon', plentychess: 'PlentyChess' };
+const short = n => OTHER_ENGINES[String(n).toLowerCase()] || aliasMap[ekey(n)] || canon(n).replace(/^pawnstorm-/i, '');
 /// The same for engine names buried in free text (tournament titles, achievement descriptions).
 const friendlyText = s => {
   let t = String(s ?? '');
   if (aliasRe) t = t.replace(aliasRe, m => aliasRe._map[m.toLowerCase()] || m);
+  t = t.replace(/\b(stockfish|rubichess|dragon|plentychess)\b/g, m => OTHER_ENGINES[m]);
   return t.replace(/\bpawnstorm[-_ ]?v?(\d)/gi, 'v$1');
 };
 const isOurs = n => !!aliasMap[ekey(n)] || /^pawnstorm/i.test(n);
+/// "v1.2 · Gen2, 260M": the version name plus its title from versions.ini (other engines: just the name).
+const label = n => { const s = short(n), t = titleMap[s]; return t ? s + ' · ' + t : s; };
+/// Main versions are plain numbers (v1.3); experiments add a letter (v1.2k). Dropped and planned ones aren't main.
+const isMajor = name => { const c = catalog.find(v => v.name === name); return /^v\d+(\.\d+)+$/.test(name) && !(c && ['failed', 'planned'].includes(c.status)); };
 
 /// Everything about the engine versions, derived from the server's joint rating fit.
 function versionModel() {
@@ -363,23 +372,32 @@ function versionModel() {
     key: short(r.name), name: short(r.name), short: short(r.name), perf: r.rating, err: r.err,
     games: r.games, first: r.first_seen, live: r.live, vs: (r.vs || []).map(o => ({ ...o, name: short(o.name), n: o.w + o.d + o.l })),
   })).sort((a, b) => a.first - b.first);
-  // Headline = strongest version. Versions with too few games (huge error margin) don't qualify,
-  // so a lucky early result from an experiment can't replace it.
-  const solid = pts.filter(p => p.err <= 100);
-  const pool = solid.length ? solid : pts;
-  const strongest = pool.reduce((b, p) => !b || p.perf > b.perf ? p : b, null);
+  pts.forEach(p => { p.title = titleMap[p.key] || ''; p.label = p.title ? p.key + ' · ' + p.title : p.key; });
+  // Headline = strongest main version. Versions with too few games (huge error margin) don't qualify,
+  // so a lucky early result can't replace it; experiments (v1.2k...) count once promoted to a main version.
+  const majorPts = pts.filter(p => isMajor(p.key)).map(p => ({ ...p }));
+  const solid = majorPts.filter(p => p.err <= 100);
+  const pool = solid.length ? solid : majorPts.length ? majorPts : pts;
+  const top = pool.reduce((b, p) => !b || p.perf > b.perf ? p : b, null);
+  const topKey = top && top.key;
+  annotate(pts, topKey);
+  annotate(majorPts, topKey);
+  return { pts, major: majorPts, strongest: majorPts.find(p => p.key === topKey) || pts.find(p => p.key === topKey) || null };
+}
+
+/// Index, verdict against the best version before it, and the best-so-far line, in build order.
+function annotate(pts, strongestKey) {
   let prevBest = null;
   pts.forEach((p, i) => {
     p.index = i; p.prev = prevBest;
     p.gain = prevBest ? p.perf - prevBest.perf : null;
     const margin = prevBest ? Math.hypot(p.err, prevBest.err) : 0;
     p.verdict = !prevBest ? 'first' : p.gain > margin ? 'better' : p.gain < -margin ? 'worse' : 'same';
-    p.strongest = p === strongest;
+    p.strongest = p.key === strongestKey;
     p.provisional = p.err > 100;
     if (!prevBest || p.perf > prevBest.perf) prevBest = p;
     p.best = prevBest; // best version so far, as of this one
   });
-  return { pts, strongest };
 }
 
 /// "Beats SF-2900, loses to SF-3100", from results against fixed-strength Stockfish.
@@ -445,7 +463,7 @@ function ratingChart(pts, W) {
     if (p.live) s += `<circle cx="${x}" cy="${Y(p.perf)}" r="${reduceMotion ? 10 : 6}" fill="none" stroke="var(--good)" stroke-width="2">${reduceMotion ? '' : '<animate attributeName="r" values="6;14;6" dur="1.6s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values="1;0;1" dur="1.6s" repeatCount="indefinite"/>'}</circle>`;
     // Experiments that didn't beat the best version so far are hollow rings, so they can't be mistaken for progress.
     const hollow = p.verdict === 'worse' && !p.strongest;
-    s += `<circle cx="${x}" cy="${Y(p.perf)}" r="${p.strongest ? 7 : 5.5}" fill="${hollow ? 'var(--panel)' : col}" stroke="${hollow ? col : 'var(--panel)'}" stroke-width="${hollow ? 2.5 : 2}"><title>${esc(p.short)}: ${p.perf.toFixed(0)} ±${p.err.toFixed(0)} (${p.games} games)</title></circle>`;
+    s += `<circle cx="${x}" cy="${Y(p.perf)}" r="${p.strongest ? 7 : 5.5}" fill="${hollow ? 'var(--panel)' : col}" stroke="${hollow ? col : 'var(--panel)'}" stroke-width="${hollow ? 2.5 : 2}"><title>${esc(p.label || p.short)}: ${p.perf.toFixed(0)} ±${p.err.toFixed(0)} (${p.games} games)</title></circle>`;
     if (shown.has(i)) {
       s += `<text class="axl" x="${x}" y="${Y(p.perf + p.err) - 6}" text-anchor="middle">${p.perf.toFixed(0)}</text>`;
       const room = Math.max(5, Math.floor((W - L - R - 32) / Math.max(1, n - 1) * every / 6.4));
@@ -510,30 +528,30 @@ const HELP_RATING = `<b>Rating</b> is an Elo-style strength score: +100 means wi
   <b>±</b> is the 95% margin of error; it shrinks as more games are played. The scale is relative to these opponents, not an official rating.`;
 
 function renderHero(m) {
-  const pts = m.pts, cur = m.strongest;
+  const pts = m.major.length ? m.major : m.pts, cur = m.strongest;
   if (!cur) return `<div class="panel"><div class="rating-label">Pawnstorm rating</div><div class="rating">–</div><div class="sub">Run a rating gauntlet to get the first estimate.</div></div>`;
   const earlier = pts.slice(0, cur.index);
   const prev = earlier.length ? earlier.reduce((b, p) => p.perf > b.perf ? p : b) : null;
   const delta = prev ? cur.perf - prev.perf : null;
   const gamesAll = runs.reduce((s, r) => s + r.games, 0);
   const W = viewW() > 860 ? Math.round((viewW() - 16) * 2 / 3) - 40 : viewW() - 40;
-  const experiments = pts.filter(p => p.verdict === 'worse').length;
+  const experiments = catalog.filter(c => c.status === 'failed').length;
   return `<div class="hero">
     <div class="panel">
       <div class="rating-label">Strongest version so far ${cur.live ? '<span class="live-badge"><span class="dot running"></span>updating live</span>' : ''}</div>
-      <div class="vbig">${esc(cur.short)}</div>
+      <div class="vbig">${esc(cur.short)}${cur.title ? `<span class="vbig-title">${esc(cur.title)}</span>` : ''}</div>
       <div class="rating">${cur.perf.toFixed(0)} <small>±${cur.err.toFixed(0)}</small></div>
       <div>${delta == null ? '<span class="chip">First version</span>' : `<span class="chip ${delta > 0 ? 'good' : ''}">${sign(delta)} Elo</span> <span class="sub">over the previous best (${esc(prev.short)})</span>`}</div>
       <div class="level">${levelText(cur)}</div>
       <div class="facts">
-        <div class="fact"><div class="k">Versions tested</div><div class="v">${pts.length}${experiments ? `<span class="sub" style="font-weight:500;font-size:12px"> · ${experiments} experiment${experiments > 1 ? 's' : ''} didn't help</span>` : ''}</div></div>
+        <div class="fact"><div class="k">Versions tested</div><div class="v">${m.pts.length}${experiments ? `<span class="sub" style="font-weight:500;font-size:12px"> · ${experiments} experiment${experiments > 1 ? 's' : ''} didn't help</span>` : ''}</div></div>
         <div class="fact"><div class="k">Games played</div><div class="v">${big(gamesAll)}</div></div>
         <div class="fact"><div class="k">Gain since first version</div><div class="v ${cls(cur.perf - pts[0].perf)}">${pts.length > 1 ? sign(cur.perf - pts[0].perf) + ' Elo' : '–'}</div></div>
         <div class="fact"><div class="k">First rated</div><div class="v">${pts[0].first ? new Date(pts[0].first * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '–'}</div></div>
       </div>
       ${helpBlock('help:rating', 'What do these numbers mean?', HELP_RATING)}
     </div>
-    <div class="panel chart"><div class="rating-label" style="margin-bottom:6px">Rating by version, in the order they were built</div>${ratingChart(pts, W)}
+    <div class="panel chart"><div class="rating-label" style="margin-bottom:6px">Rating of each main version, in the order they were built <span class="sub" style="text-transform:none;letter-spacing:0">(experiments are on the Versions tab)</span></div>${ratingChart(pts, W)}
       <div class="legend"><span><i style="background:var(--gold)"></i>Strongest</span><span><i style="background:var(--accent)"></i>Improved</span><span><i style="background:var(--muted)"></i>About the same</span><span><i style="background:var(--panel);border:2px solid var(--warn)"></i>Weaker experiment</span><span>━ best so far</span></div>
     </div>
   </div>`;
@@ -675,7 +693,7 @@ function renderVersions(m) {
     const parentTxt = c && c.parent ? esc(c.parent) + (parentP ? ` <span class="sub">(${parentP.perf.toFixed(0)})</span>` : '') : '';
     let h = `<div class="vcard ${status === 'planned' ? 'planned' : ''} ${p && p.strongest ? 'is-best' : ''} ${status === 'failed' ? 'is-worse' : ''}">
       <div class="vtop" ${p ? `data-toggle="ver:${esc(name)}"` : ''}>
-        <div style="min-width:0"><div class="vtitle">${esc(name)}</div>
+        <div style="min-width:0"><div class="vtitle">${esc(name)}${c && c.title ? `<span class="vtitle-sub">${esc(c.title)}</span>` : ''}</div>
           <div class="vchips">${c ? statusChip(status) : '<span class="chip">Not in versions.ini</span>'}
             ${p && p.live ? '<span class="chip info"><span class="dot running"></span>Games being played</span>' : p && p.provisional ? '<span class="chip">Few games so far</span>' : ''}
             ${p && p.strongest ? '<span class="chip best">★ Highest measured rating</span>' : ''}</div></div>
@@ -744,7 +762,7 @@ function renderRun(r, b, compact) {
         ${helpBlock('help:sprt:' + b.id, 'What is this?', '<b>SPRT</b> plays games until it is statistically confident that a change helps (or does not). The <b>confidence score (LLR)</b> moves right when the change looks better and left when it looks worse; reaching the right edge means the change is a proven improvement, the left edge means it is not.')}</div>`;
   }
   html += '</div>';
-  if (r.problems.length) html += `<div class="warnbox">⚠ Problems: ${r.problems.map(p => `${p.count}× ${esc(p.kind)} (${esc(p.engine)})`).join(', ')}</div>`;
+  if (r.problems.length) html += `<div class="warnbox">⚠ Problems: ${r.problems.map(p => `${p.count}× ${esc(p.kind)} (${esc(short(p.engine))})`).join(', ')}</div>`;
   if (r.live.length) html += `<h4>Games being played now (${r.live.length})</h4><div class="games">${r.live.map(liveGame).join('')}</div>`;
   if (r.series.length > 1) html += `<h4>How far ahead it is as games come in</h4><div class="chart">${eloChart(r.series, W)}</div>`;
   if (r.opponents.length) html += `<h4>Results against each opponent</h4><div class="tbl"><table>
@@ -796,7 +814,7 @@ function liveGame(g) {
 // ---- Championship tab: the latest round robin, with ratings fitted from its games alone ----
 const latestChampionship = () => runs.filter(r => r.type === 'roundrobin').sort((a, b) => b.created - a.created)[0];
 const CHAMP_NAMES = { stockfish: 'Stockfish 18 (full strength)', rubichess: 'RubiChess', dragon: 'Komodo Dragon', plentychess: 'PlentyChess' };
-const champName = n => CHAMP_NAMES[n] || short(n);
+const champName = n => CHAMP_NAMES[n] || label(n);
 
 function renderChampionship() {
   const rr = latestChampionship();
@@ -1207,7 +1225,7 @@ function renderLab() {
   const top = `<div class="panel run">
     <div class="now-head"><h3>${esc(status)}</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${labControls()}</div></div>
     ${parts.map(([k, n]) => `<div class="now-row" style="cursor:default"><span class="dot ${lab[k] ? 'running' : 'stopped'}"></span><div class="now-main"><div class="now-t" style="${lab[k] ? '' : 'color:var(--muted);font-weight:500'}">${n}</div></div><span class="sub">${lab[k] ? 'on' : 'off'}</span></div>`).join('')}
-    ${lab.log && lab.log.length ? `<div class="sub" style="margin-top:10px;font-size:12px;white-space:pre-wrap">Last action:\n${esc(lab.log.join('\n'))}</div>` : ''}
+    ${lab.log && lab.log.length && lab.log_time && Date.now() / 1000 - lab.log_time < 6 * 3600 ? `<div class="sub" style="margin-top:10px;font-size:12px;white-space:pre-wrap">Last start/stop from the dashboard (${when(lab.log_time)}):\n${esc(lab.log.join('\n'))}</div>` : ''}
   </div>`;
   return `<h2 style="margin-top:4px">Lab</h2>` + top + renderHealth() + renderDatagen() + renderTraining();
 }

@@ -510,6 +510,8 @@ fn positions_from_name(name: &str) -> u64 {
 #[derive(Default, Clone)]
 struct Version {
     name: String,
+    /// Short description shown next to the version name, e.g. "Gen2 260M".
+    title: String,
     engines: Vec<String>,
     status: String,
     date: String,
@@ -536,6 +538,7 @@ fn parse_versions(text: &str) -> Vec<Version> {
         let val = val.trim().to_string();
         match k.trim().to_lowercase().as_str() {
             "engines" => v.engines = val.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            "title" => v.title = val,
             "status" => v.status = val,
             "date" => v.date = val,
             "parent" => v.parent = val,
@@ -1053,8 +1056,9 @@ impl App {
             .iter()
             .map(|v| {
                 format!(
-                    "{{\"name\":{},\"engines\":[{}],\"status\":{},\"date\":{},\"parent\":{},\"branch\":{},\"network\":{},\"data\":{},\"summary\":{}}}",
+                    "{{\"name\":{},\"title\":{},\"engines\":[{}],\"status\":{},\"date\":{},\"parent\":{},\"branch\":{},\"network\":{},\"data\":{},\"summary\":{}}}",
                     js(&v.name),
+                    js(&v.title),
                     v.engines.iter().map(|e| js(e)).collect::<Vec<_>>().join(","),
                     js(&v.status),
                     js(&v.date),
@@ -1419,7 +1423,9 @@ impl App {
                     }
                 }
                 if let Some((v, e, _)) = r.rating {
-                    for step in RATING_STEPS.iter().filter(|&&s| v >= s) {
+                    // Only when the whole 95% range is above the mark, so one lucky test with a wide
+                    // margin (e.g. 3230 ±111) can't claim 3200.
+                    for step in RATING_STEPS.iter().filter(|&&s| v - e >= s) {
                         got.entry(format!("rating:{step}")).or_insert(Ach {
                             cat: "rating",
                             key: *step,
@@ -1483,7 +1489,7 @@ impl App {
         };
         for step in RATING_STEPS {
             got.entry(format!("rating:{step}"))
-                .or_insert_with(|| locked("rating", step, "📈", format!("Reach {step:.0} rating"), "Confirmed by a finished rating test".into()));
+                .or_insert_with(|| locked("rating", step, "📈", format!("Reach {step:.0} rating"), "A finished rating test whose whole 95% range is above it".into()));
         }
         for opp in LADDER {
             let s = strength(opp);
@@ -1581,8 +1587,9 @@ impl App {
         let tail: Vec<String> = log.lines().rev().take(8).collect::<Vec<_>>().into_iter().rev().map(js).collect();
         let busy = self.lab_busy();
         format!(
-            "{{\"watchdog\":{watchdog},\"cloud_sync\":{sync},\"oracle_sync\":{oracle},\"datagen\":{datagen},\"busy\":{},\"log\":[{}]}}",
+            "{{\"watchdog\":{watchdog},\"cloud_sync\":{sync},\"oracle_sync\":{oracle},\"datagen\":{datagen},\"busy\":{},\"log_time\":{},\"log\":[{}]}}",
             js(&busy),
+            mtime(&self.root.join("lab-control.log")),
             tail.join(",")
         )
     }
