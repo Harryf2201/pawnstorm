@@ -375,7 +375,7 @@ const isOurs = n => !!aliasMap[ekey(n)] || /^pawnstorm/i.test(n);
 /// "v1.2 · Gen2, 260M": the version name plus its title from versions.ini (other engines: just the name).
 const label = n => { const s = short(n), t = titleMap[s]; return t ? s + ' · ' + t : s; };
 /// Main versions are plain numbers (v1.3); experiments add a letter (v1.2k). Dropped and planned ones aren't main.
-const isMajor = name => { const c = catalog.find(v => v.name === name); return /^v\d+(\.\d+)+$/.test(name) && !(c && ['failed', 'planned'].includes(c.status)); };
+const isMajor = name => { const c = catalog.find(v => v.name === name); return /^v\d+(\.\d+)+$/.test(name) && !(c && ['failed', 'planned', 'testing', 'shelved'].includes(c.status)); };
 
 /// Everything about the engine versions, derived from the server's joint rating fit.
 function versionModel() {
