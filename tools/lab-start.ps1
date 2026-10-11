@@ -1,8 +1,8 @@
 # Starts everything for a session: sensors, dashboard, watchdog, cloud sync, auto-training and
 # local data generation (resuming where it left off). Anything already running is left alone.
 # Usage: .\tools\lab-start.ps1            (or the "Pawnstorm Lab - Start" desktop shortcut)
-# Local data generation: gen2 = self-play with the v0.8 network (gen1-pesto-5k was the hand-crafted-eval data).
-param([int]$DatagenThreads = 18, [int64]$DatagenTarget = 1000000000, [string]$DatagenName = 'gen2-v08-5k', [string]$DatagenExe = 'pawnstorm-datagen-gen2', [switch]$NoBrowser)
+# Local data generation: gen3 = self-play with the v1.3 network (gen2-v08-5k used v0.8's, gen1-pesto-5k the hand-crafted eval).
+param([int]$DatagenThreads = 18, [int64]$DatagenTarget = 1000000000, [string]$DatagenName = 'gen3-v13-5k', [string]$DatagenExe = 'pawnstorm-datagen-gen3', [switch]$NoBrowser)
 
 . "$PSScriptRoot\paths.ps1"
 $ps = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File')

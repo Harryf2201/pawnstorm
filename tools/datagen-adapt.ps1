@@ -6,8 +6,8 @@
 param(
     [int]$Busy = 6,
     [int]$Idle = 14,
-    [string]$Name = 'gen2-v08-5k',
-    [string]$Exe = 'pawnstorm-datagen-gen2',
+    [string]$Name = 'gen3-v13-5k',
+    [string]$Exe = 'pawnstorm-datagen-gen3',
     [int64]$Target = 1000000000
 )
 . "$PSScriptRoot\paths.ps1"

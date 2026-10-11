@@ -1,14 +1,15 @@
 # Collects self-play data from the always-on Oracle Cloud server (see tools\engines.local.ps1 for its
 # address). The server writes finished 1-hour segments to ~/outbox/seg-<time>/ (gzipped data plus
-# status.txt); this copies each one into testing\datagen\oracle-gen2\, then deletes it on the server.
-# testing\datagen\oracle-gen2\status.txt totals every collected segment for the dashboard and training.
+# status.txt); this copies each one into testing\datagen\<Name>\, then deletes it on the server.
+# testing\datagen\<Name>\status.txt totals every collected segment for the dashboard and training.
 # Usage: .\tools\oracle-sync.ps1            (loop every 10 minutes; run hidden in the background)
 #        .\tools\oracle-sync.ps1 -Once
-param([switch]$Once, [int]$IntervalSeconds = 600)
+# -Name: the data folder; it changes with each data generation (oracle-gen2 = v0.8's network, oracle-gen3 = v1.3's).
+param([switch]$Once, [int]$IntervalSeconds = 600, [string]$Name = 'oracle-gen3')
 
 . "$PSScriptRoot\paths.ps1"
 if (-not $OracleHost) { throw 'Set $OracleHost and $OracleKey in tools\engines.local.ps1' }
-$dir = "$LabRoot\datagen\oracle-gen2"
+$dir = "$LabRoot\datagen\$Name"
 $events = "$LabRoot\datagen\oracle-events.log"
 New-Item -ItemType Directory -Force $dir | Out-Null
 $ssh = @('-i', $OracleKey, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20')
