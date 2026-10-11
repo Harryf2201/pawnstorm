@@ -433,6 +433,7 @@ const STATUS = {
   testing: ['info', 'Testing'],
   passed: ['good', '✓ Passed'],
   failed: ['bad', '✗ Failed'],
+  shelved: ['warn', 'Shelved'],
   planned: ['plan', 'Planned'],
 };
 const statusChip = s => { const [c, t] = STATUS[s] || ['', s || 'Unlisted']; return `<span class="chip ${c}">${esc(t)}</span>`; };
@@ -684,7 +685,7 @@ function renderExperiments(m) {
   const rows = exps.map(({ c, p, parent }) => {
     const d = p.perf - parent.perf, e = Math.hypot(p.err, parent.err);
     const tone = d - e > 0 ? 'good' : d + e < 0 ? 'bad' : 'same';
-    const verdict = c.became ? `kept, became ${esc(c.became)}` : c.status === 'failed' ? 'didn\'t help' : c.status === 'testing' ? (p.live ? 'testing now' : 'testing') : tone === 'good' ? 'better' : tone === 'bad' ? 'worse' : 'about the same';
+    const verdict = c.became ? `kept, became ${esc(c.became)}` : c.status === 'failed' ? 'didn\'t help' : c.status === 'shelved' ? 'shelved, not clear yet' : c.status === 'testing' ? (p.live ? 'testing now' : 'testing') : tone === 'good' ? 'better' : tone === 'bad' ? 'worse' : 'about the same';
     return `<div class="xrow" data-go="versions"><div class="xname"><b>${esc(c.name)}</b> <span class="sub">${esc(c.title || '')}</span><div class="sub" style="font-size:12px">vs ${esc(c.parent)} · ${p.games} games · ${verdict}${p.live ? ' <span class="dot running" style="display:inline-block;vertical-align:middle"></span>' : ''}</div></div>
       <div class="xbar"><div class="xzero"></div><div class="xerr ${tone}" style="left:${x(d - e)}%;width:${x(d + e) - x(d - e)}%"></div><div class="xdot ${tone}" style="left:${x(d)}%"></div></div>
       <div class="xnum ${tone === 'good' ? 'pos' : tone === 'bad' ? 'neg' : ''}">${sign(d)}<span class="sub" style="font-size:11px"> ±${e.toFixed(0)}</span></div></div>`;
