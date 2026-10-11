@@ -14,6 +14,17 @@
     --sq-light: #e8dcc0; --sq-dark: #a7825a; --hl: rgba(255, 214, 10, .45);
   }
   * { box-sizing: border-box; }
+  /* Experiments panel */
+  .xrow { display: grid; grid-template-columns: minmax(150px, 1.2fr) 2fr 74px; gap: 12px; align-items: center; padding: 9px 0; border-top: 1px solid var(--border); cursor: pointer; }
+  .xscale { display: grid; grid-template-columns: minmax(150px, 1.2fr) 2fr 74px; gap: 12px; font-size: 11px; color: var(--muted); }
+  .xscale .xs { display: flex; justify-content: space-between; }
+  .xbar { position: relative; height: 16px; background: var(--panel2); border-radius: 8px; }
+  .xzero { position: absolute; left: 50%; top: 0; bottom: 0; border-left: 1px dashed var(--muted); }
+  .xerr { position: absolute; top: 6px; height: 4px; border-radius: 2px; opacity: .45; background: var(--muted); }
+  .xdot { position: absolute; top: 3px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--muted); }
+  .xerr.good, .xdot.good { background: var(--good); } .xerr.bad, .xdot.bad { background: var(--bad); }
+  .xnum { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  @media (max-width: 560px) { .xrow, .xscale { grid-template-columns: 1fr 64px; } .xbar { grid-column: 1 / -1; grid-row: 2; } .xscale { display: none; } }
   .vbig-title { font-size: 15px; font-weight: 500; color: var(--muted); margin-left: 10px; }
   .vtitle-sub { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 8px; }
   /* Championship tab */
@@ -656,7 +667,32 @@ function renderGoals() {
 }
 
 function renderOverview(m) {
-  return renderHero(m) + renderNow() + renderGoals();
+  return renderHero(m) + renderExperiments(m) + renderNow() + renderGoals();
+}
+
+/// Experiments (versions with a letter, e.g. v1.2k): how each compares with the version it was
+/// built from, as a bar of Elo gained or lost with its 95% range. Newest first.
+function renderExperiments(m) {
+  const rated = Object.fromEntries(m.pts.map(p => [p.key, p]));
+  const exps = catalog.filter(c => !/^v\d+(\.\d+)+$/.test(c.name) && c.status !== 'planned')
+    .map(c => ({ c, p: rated[c.name], parent: rated[c.parent] })).filter(e => e.p && e.parent).reverse();
+  const planned = catalog.filter(c => !/^v\d+(\.\d+)+$/.test(c.name) && c.status === 'planned');
+  if (!exps.length && !planned.length) return '';
+  const open = isOpen('sec:experiments', true);
+  const span = 150; // the bar shows -150..+150 Elo
+  const x = v => 50 + 50 * Math.max(-1, Math.min(1, v / span));
+  const rows = exps.map(({ c, p, parent }) => {
+    const d = p.perf - parent.perf, e = Math.hypot(p.err, parent.err);
+    const tone = d - e > 0 ? 'good' : d + e < 0 ? 'bad' : 'same';
+    const verdict = c.status === 'failed' ? 'didn\'t help' : c.status === 'testing' ? (p.live ? 'testing now' : 'testing') : tone === 'good' ? 'better' : tone === 'bad' ? 'worse' : 'about the same';
+    return `<div class="xrow" data-go="versions"><div class="xname"><b>${esc(c.name)}</b> <span class="sub">${esc(c.title || '')}</span><div class="sub" style="font-size:12px">vs ${esc(c.parent)} · ${p.games} games · ${verdict}${p.live ? ' <span class="dot running" style="display:inline-block;vertical-align:middle"></span>' : ''}</div></div>
+      <div class="xbar"><div class="xzero"></div><div class="xerr ${tone}" style="left:${x(d - e)}%;width:${x(d + e) - x(d - e)}%"></div><div class="xdot ${tone}" style="left:${x(d)}%"></div></div>
+      <div class="xnum ${tone === 'good' ? 'pos' : tone === 'bad' ? 'neg' : ''}">${sign(d)}<span class="sub" style="font-size:11px"> ±${e.toFixed(0)}</span></div></div>`;
+  }).join('');
+  const plannedTxt = planned.length ? `<div class="sub" style="margin-top:10px;font-size:12px">Coming up: ${planned.map(c => `<b>${esc(c.name)}</b> ${esc(c.title || '')}`).join(' · ')}</div>` : '';
+  const body = `<div class="panel"><div class="sub" style="font-size:12px;margin-bottom:8px">Elo gained or lost against the version each experiment was built from. The faint bar is the 95% range: if it crosses the middle line, the result isn't certain yet.</div>
+    <div class="xscale"><div></div><div class="xs"><span>−${span}</span><span>0</span><span>+${span}</span></div><div></div></div>${rows}${plannedTxt}</div>`;
+  return section('sec:experiments', 'Experiments', `${exps.length} tried`, body, true);
 }
 
 // ---- Versions: the catalog in versions.ini, plus live ratings from every game played ----
