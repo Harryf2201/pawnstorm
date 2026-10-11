@@ -3,6 +3,7 @@
 # Engine specs:
 #   sf:2400            Stockfish limited to UCI_Elo 2400 (used as a rating anchor)
 #   stockfish, dragon, rubichess, plentychess   full-strength engines in Downloads
+#   <name> with <name>.nnue + <name>.runner   that network on the build named in .runner
 #   anything else      testing\engines\<name>.exe (e.g. pawnstorm-v0.1)
 #
 # Examples:
@@ -37,6 +38,11 @@ foreach ($spec in $Engines) {
     } elseif ($Known.ContainsKey($spec)) {
         $n = $spec
         $fcArgs += '-engine', "cmd=$($Known[$spec])", "name=$n"
+    } elseif ((Test-Path "$Root\engines\$spec.nnue") -and (Test-Path "$Root\engines\$spec.runner")) {
+        # A network tested on a particular search: <spec>.runner names the build (e.g. pawnstorm-v1.5).
+        $n = $spec
+        $runner = (Get-Content "$Root\engines\$spec.runner" -TotalCount 1).Trim()
+        $fcArgs += '-engine', "cmd=$Root\engines\$runner.exe", "name=$n", "option.EvalFile=$Root\engines\$spec.nnue"
     } elseif ((Test-Path "$Root\engines\$spec.nnue") -and -not (Test-Path "$Root\engines\$spec.exe")) {
         # (A version with its own build, e.g. a different network architecture, always runs its .exe:
         # the shared build can only read standard networks.)

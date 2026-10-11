@@ -1,5 +1,5 @@
 # Starts a GPU training run in the background, logging where the dashboard can see it.
-# Usage: .\tools\train.ps1 -Name net1 -Data gen1 [-Superbatches 40] [-Wdl 0.4] [-Inputs 768|kb10]
+# Usage: .\tools\train.ps1 -Name net1 -Data gen1 [-Superbatches 40] [-Wdl 0.4] [-Inputs 768|kb10|kb4]
 #   -Inputs kb10 = 10 king buckets, mirrored (needs an engine built from the kb branch).
 param(
     [Parameter(Mandatory)][string]$Name,
@@ -8,7 +8,7 @@ param(
     [double]$Wdl = 0.4,
     [int]$Hidden = 512,
     [int]$Buckets = 1,
-    [ValidateSet('768', 'kb10')][string]$Inputs = '768',
+    [ValidateSet('768', 'kb10', 'kb4')][string]$Inputs = '768',
     [switch]$Build
 )
 
