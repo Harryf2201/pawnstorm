@@ -769,6 +769,80 @@ fn replay(cmd: &str) -> Option<(Board, Option<Move>, usize)> {
     Some((b, last, n))
 }
 
+/// For round robins: every pairing's W/D/L ("cross") and ratings fitted from this run's games alone,
+/// with its Stockfish anchors fixed ("fit"). Same maximum-likelihood fit as the overall ratings,
+/// including one virtual draw per pairing so 100% scores stay finite.
+fn cross_and_fit(r: &RunState) -> String {
+    let mut names: Vec<String> = Vec::new();
+    let mut pairs: BTreeMap<(usize, usize), [f64; 3]> = BTreeMap::new();
+    let idx = |n: &str, names: &mut Vec<String>| match names.iter().position(|x| x == n) {
+        Some(i) => i,
+        None => {
+            names.push(n.to_string());
+            names.len() - 1
+        }
+    };
+    for g in &r.games {
+        let Some(s) = result_for(g, &g.white) else { continue };
+        let (w, b) = (idx(&g.white, &mut names), idx(&g.black, &mut names));
+        if w == b {
+            continue;
+        }
+        let (i, j, si) = if w < b { (w, b, s) } else { (b, w, 1.0 - s) };
+        let e = pairs.entry((i, j)).or_insert([0.0; 3]);
+        e[if si == 1.0 { 0 } else if si == 0.5 { 1 } else { 2 }] += 1.0;
+    }
+    let n = names.len();
+    let anchor: Vec<Option<f64>> = names.iter().map(|x| r.meta.anchors.iter().find(|(a, _)| a == x).map(|(_, v)| *v)).collect();
+    let mut rating: Vec<f64> = anchor.iter().map(|a| a.unwrap_or(3000.0)).collect();
+    let k = 400.0 / std::f64::consts::LN_10;
+    let expected = |a: f64, b: f64| 1.0 / (1.0 + 10f64.powf((b - a) / 400.0));
+    let mut info = vec![0.0; n];
+    for _ in 0..3000 {
+        let mut grad = vec![0.0; n];
+        info.iter_mut().for_each(|x| *x = 0.0);
+        for (&(i, j), c) in &pairs {
+            let games = c[0] + c[1] + c[2] + 1.0;
+            let si = c[0] + c[1] / 2.0 + 0.5;
+            let e = expected(rating[i], rating[j]);
+            grad[i] += si - games * e;
+            grad[j] -= si - games * e;
+            info[i] += games * e * (1.0 - e);
+            info[j] += games * e * (1.0 - e);
+        }
+        let mut moved = 0.0f64;
+        for i in 0..n {
+            if anchor[i].is_none() && info[i] > 0.0 {
+                let step = (k * grad[i] / info[i]).clamp(-100.0, 100.0) * 0.5;
+                rating[i] += step;
+                moved = moved.max(step.abs());
+            }
+        }
+        if moved < 0.01 {
+            break;
+        }
+    }
+    let mut o = String::from("\"cross\":[");
+    for (c, (&(i, j), v)) in pairs.iter().enumerate() {
+        let _ = write!(o, "{}[{},{},{},{},{}]", if c > 0 { "," } else { "" }, js(&names[i]), js(&names[j]), v[0], v[1], v[2]);
+    }
+    o.push_str("],\"fit\":[");
+    for i in 0..n {
+        let err = if anchor[i].is_some() { 0.0 } else if info[i] > 0.0 { 1.96 * k / info[i].sqrt() } else { 999.0 };
+        let _ = write!(
+            o,
+            "{}{{\"name\":{},\"rating\":{},\"err\":{},\"anchor\":{}}}",
+            if i > 0 { "," } else { "" },
+            js(&names[i]),
+            num(rating[i]),
+            num(err),
+            anchor[i].is_some()
+        );
+    }
+    o.push_str("],");
+    o
+}
+
 fn run_detail(id: &str, r: &RunState) -> String {
     let (s, per) = summarize(r);
     let main = &r.meta.main;
@@ -841,6 +915,7 @@ fn run_detail(id: &str, r: &RunState) -> String {
         let _ = write!(o, "{}{{\"name\":{},\"points\":{},\"games\":{}}}", if i > 0 { "," } else { "" }, js(n), pts, g);
     }
     o.push_str("],");
+    o.push_str(&cross_and_fit(r));
 
     // Running Elo estimate for the main engine.
     let main_games: Vec<f64> = r.games.iter().filter_map(|g| result_for(g, main)).collect();

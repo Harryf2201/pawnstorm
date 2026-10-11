@@ -14,6 +14,27 @@
     --sq-light: #e8dcc0; --sq-dark: #a7825a; --hl: rgba(255, 214, 10, .45);
   }
   * { box-sizing: border-box; }
+  /* Championship tab */
+  .cl-wrap { overflow-x: auto; }
+  table.cl, table.xt { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  table.cl th, table.xt th { color: var(--muted); font-weight: 600; font-size: 12px; text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.cl td { padding: 7px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.cl .num, table.cl th.num { text-align: right; }
+  table.cl tr.ours td:nth-child(2) b { color: var(--accent); }
+  td.cl-bar { width: 38%; min-width: 160px; }
+  .cl-track { position: relative; height: 14px; background: var(--panel2); border-radius: 7px; }
+  .cl-err { position: absolute; top: 5px; height: 4px; background: var(--muted); opacity: .55; border-radius: 2px; }
+  .cl-dot { position: absolute; top: 2px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--muted); }
+  .cl-dot.ours { background: var(--accent); }
+  table.xt th { text-align: center; max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
+  table.xt th.rowh { text-align: left; max-width: none; }
+  table.xt tr.ours th.rowh { color: var(--accent); }
+  td.xc { text-align: center; padding: 6px 4px; border: 1px solid var(--bg); font-weight: 600; min-width: 58px; }
+  td.xc span { display: block; font-size: 10px; font-weight: 400; color: var(--muted); }
+  td.xc.win { background: color-mix(in srgb, var(--good) calc(var(--a) * 45%), var(--panel2)); }
+  td.xc.loss { background: color-mix(in srgb, var(--bad) calc(var(--a) * 45%), var(--panel2)); }
+  td.xc.even, td.xc.diag { background: var(--panel2); }
+  td.xc.diag { color: var(--muted); }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
   a { color: var(--accent); }
   header { display: flex; align-items: center; gap: 20px; padding: 10px 24px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 5; }
@@ -251,7 +272,7 @@ const big = n => n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (n / 1e6).to
 const pct = (w, d, n) => n ? 100 * (w + d / 2) / n : null;
 
 // ---- UI state (remembered between visits) ----
-const TABS = [['overview', 'Overview', '🏠'], ['versions', 'Versions', '📈'], ['tournaments', 'Tournaments', '⚔️'], ['achievements', 'Achievements', '🏆'], ['lab', 'Lab', '🔧']];
+const TABS = [['overview', 'Overview', '🏠'], ['versions', 'Versions', '📈'], ['championship', 'Championship', '🏁'], ['tournaments', 'Tournaments', '⚔️'], ['achievements', 'Achievements', '🏆'], ['lab', 'Lab', '🔧']];
 const ui = { state: {}, sort: 'new', group: 'cat' };
 try { const s = JSON.parse(localStorage.getItem('pawn-ui') || '{}'); Object.assign(ui, s); } catch (e) {}
 const saveUi = () => { try { localStorage.setItem('pawn-ui', JSON.stringify({ state: ui.state, sort: ui.sort, group: ui.group })); } catch (e) {} };
@@ -770,6 +791,77 @@ function liveGame(g) {
   </div>`;
 }
 
+// ---- Championship tab: the latest round robin, with ratings fitted from its games alone ----
+const latestChampionship = () => runs.filter(r => r.type === 'roundrobin').sort((a, b) => b.created - a.created)[0];
+const CHAMP_NAMES = { stockfish: 'Stockfish 18 (full strength)', rubichess: 'RubiChess', dragon: 'Komodo Dragon', plentychess: 'PlentyChess' };
+const champName = n => CHAMP_NAMES[n] || short(n);
+
+function renderChampionship() {
+  const rr = latestChampionship();
+  if (!rr) return '<div class="empty">No championship has been played yet.</div>';
+  const d = details[rr.id];
+  if (!d || !d.fit) return '<div class="empty">Loading the championship…</div>';
+  const running = rr.status === 'running';
+  // Totals per engine from the crosstable.
+  const tot = {};
+  const cell = {};
+  d.cross.forEach(([a, b, w, dr, l]) => {
+    (tot[a] ??= [0, 0, 0]); (tot[b] ??= [0, 0, 0]);
+    tot[a][0] += w; tot[a][1] += dr; tot[a][2] += l;
+    tot[b][0] += l; tot[b][1] += dr; tot[b][2] += w;
+    cell[a + '|' + b] = [w, dr, l]; cell[b + '|' + a] = [l, dr, w];
+  });
+  const fit = d.fit.slice().sort((a, b) => b.rating - a.rating);
+  const games = rr.games || 0, total = rr.total || 0;
+  const left = running && games > 20 ? d.elapsed / games * (total - games) : null;
+  const p = total ? 100 * games / total : 0;
+
+  // Rating ladder: bars with 95% error whiskers on a shared scale.
+  const shown = fit.filter(f => f.err < 250);
+  const lo = Math.min(...shown.map(f => f.rating - f.err)) - 20, hi = Math.max(...shown.map(f => f.rating + f.err)) + 20;
+  const x = v => Math.max(0, Math.min(100, 100 * (v - lo) / (hi - lo)));
+  const ladder = fit.map((f, i) => {
+    const t = tot[f.name] || [0, 0, 0], n = t[0] + t[1] + t[2];
+    const sc = n ? 100 * (t[0] + t[1] / 2) / n : null;
+    const ours = isOurs(f.name);
+    const bar = f.err < 250 ? `<div class="cl-track"><div class="cl-err" style="left:${x(f.rating - f.err)}%;width:${x(f.rating + f.err) - x(f.rating - f.err)}%"></div><div class="cl-dot ${ours ? 'ours' : ''}" style="left:${x(f.rating)}%"></div></div>` : `<div class="cl-track"><span class="sub" style="font-size:12px">far above everyone else</span></div>`;
+    return `<tr class="${ours ? 'ours' : ''}"><td class="num">${i + 1}</td>
+      <td><b>${esc(champName(f.name))}</b>${f.anchor ? ' <span class="pill">fixed anchor</span>' : ''}</td>
+      <td class="num"><b>${f.rating.toFixed(0)}</b>${f.anchor ? '' : `<span class="sub"> ±${f.err.toFixed(0)}</span>`}</td>
+      <td class="num">${sc == null ? '–' : sc.toFixed(1) + '%'}</td>
+      <td class="num sub">${t[0]} / ${t[1]} / ${t[2]}</td>
+      <td class="cl-bar">${bar}</td></tr>`;
+  }).join('');
+
+  // Crosstable: row engine's score against each column engine.
+  const hdr = fit.map(f => `<th title="${esc(champName(f.name))}">${esc(champName(f.name).replace(/ \(full strength\)/, ''))}</th>`).join('');
+  const rows = fit.map(r => `<tr class="${isOurs(r.name) ? 'ours' : ''}"><th class="rowh">${esc(champName(r.name))}</th>${fit.map(c => {
+    if (c.name === r.name) return '<td class="xc diag">—</td>';
+    const v = cell[r.name + '|' + c.name];
+    if (!v) return '<td class="xc">·</td>';
+    const n = v[0] + v[1] + v[2], s = n ? (v[0] + v[1] / 2) / n : 0.5;
+    const tone = s >= 0.55 ? 'win' : s <= 0.45 ? 'loss' : 'even';
+    return `<td class="xc ${tone}" style="--a:${Math.min(1, Math.abs(s - 0.5) * 2.2).toFixed(2)}" title="${esc(champName(r.name))} vs ${esc(champName(c.name))}: +${v[0]} =${v[1]} −${v[2]}">${(100 * s).toFixed(0)}%<span>${n}</span></td>`;
+  }).join('')}</tr>`).join('');
+
+  return `<div class="panel run">
+    <h3><span class="dot ${running ? 'running' : 'finished'}"></span>${esc(friendlyText(rr.name))} <span class="pill">round robin</span> <span class="pill">${esc(rr.tc || '10+0.1')}</span> <span class="pill">${running ? 'running' : 'finished'}</span></h3>
+    <div class="sub" style="margin-top:4px">${esc(d.notes || '')}</div>
+    <div class="cards">
+      <div class="card wide"><div class="k">Games played</div><div class="v">${games.toLocaleString()} <span class="sub" style="font-size:.55em">/ ${total.toLocaleString()} · ${p.toFixed(1)}%</span></div>
+        <div class="d">${left != null ? 'about ' + dur(left) + ' left' : running ? 'starting…' : 'finished'} · ${d.concurrency} games at a time</div><div class="bar big"><div style="width:${p}%"></div></div></div>
+      <div class="card"><div class="k">Leader</div><div class="v" style="font-size:18px;margin-top:6px">${esc(champName(fit[0].name))}</div><div class="d">${fit[0].rating.toFixed(0)} rating in this event</div></div>
+      <div class="card"><div class="k">Best Pawnstorm</div>${(() => { const b = fit.find(f => isOurs(f.name)); return b ? `<div class="v" style="font-size:18px;margin-top:6px">${esc(champName(b.name))}</div><div class="d">${b.rating.toFixed(0)} ±${b.err.toFixed(0)}</div>` : '<div class="v">–</div>'; })()}</div>
+    </div>
+    <h4>Standings</h4>
+    <p class="lead" style="margin:0 0 10px">Ratings here come only from this event's games, with Elo-limited Stockfish fixed at its setting as the anchor. The bar shows each rating with its 95% range: where two ranges overlap, the order between them isn't settled yet. More games narrow them.</p>
+    <div class="cl-wrap"><table class="cl"><thead><tr><th>#</th><th>Engine</th><th class="num">Rating</th><th class="num">Score</th><th class="num">W / D / L</th><th></th></tr></thead><tbody>${ladder}</tbody></table></div>
+    <h4>Head to head</h4>
+    <p class="lead" style="margin:0 0 10px">Each cell is the row engine's score against the column engine (small number = games played). Green: row engine ahead, red: behind.</p>
+    <div class="cl-wrap"><table class="xt"><thead><tr><th></th>${hdr}</tr></thead><tbody>${rows}</tbody></table></div>
+  </div>`;
+}
+
 function renderTournaments() {
   const live = runs.filter(r => r.status === 'running');
   const done = runs.filter(r => r.status !== 'running');
@@ -1154,7 +1246,7 @@ function render() {
   const m = versionModel();
   renderHeader();
   if (!loaded) { setHtml($('#view'), '<div class="empty">Loading…</div>'); return; }
-  const html = { overview: () => renderOverview(m), versions: () => renderVersions(m), tournaments: renderTournaments, achievements: () => renderAchievements(m), lab: renderLab }[tab]();
+  const html = { overview: () => renderOverview(m), versions: () => renderVersions(m), championship: renderChampionship, tournaments: renderTournaments, achievements: () => renderAchievements(m), lab: renderLab }[tab]();
   setHtml($('#view'), html);
   document.title = (m.strongest ? `${m.strongest.perf.toFixed(0)} · ` : '') + 'Pawnstorm Lab';
 }
@@ -1180,7 +1272,8 @@ async function poll() {
     if (pr) { preps = pr; preps.forEach(trackPrep); }
     if (rt) ratings = rt;
     if (a) ach = a;
-    const want = runs.filter(x => x.status === 'running' || isOpen('run:' + x.id)).map(x => x.id);
+    const champ = latestChampionship();
+    const want = runs.filter(x => x.status === 'running' || isOpen('run:' + x.id) || x === champ).map(x => x.id);
     const got = await Promise.all(want.map(id => j('/api/run/' + encodeURIComponent(id))));
     details = {};
     want.forEach((id, i) => { if (got[i]) details[id] = got[i]; });
