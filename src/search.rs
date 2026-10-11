@@ -65,6 +65,10 @@ pub struct Searcher {
     corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// NNUE accumulators per ply.
     acc: Vec<AccPair>,
+    /// Nodes spent below each root move (from, to) in this search, for time management.
+    root_nodes: Box<[[u64; 64]; 64]>,
+    /// Whether the soft limit comes from a game clock (and may be stretched or shortened).
+    clock_tm: bool,
     start: Instant,
     soft_ms: u64,
     hard_ms: u64,
@@ -153,6 +157,8 @@ impl Searcher {
             lmr,
             corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             acc: vec![[Accumulator { vals: [0; nnue::HIDDEN] }; 2]; MAX_PLY + 8],
+            root_nodes: Box::new([[0; 64]; 64]),
+            clock_tm: false,
             start: Instant::now(),
             soft_ms: u64::MAX,
             hard_ms: u64::MAX,
@@ -196,6 +202,7 @@ impl Searcher {
         self.soft_ms = u64::MAX;
         self.hard_ms = u64::MAX;
         self.node_limit = limits.nodes.unwrap_or(u64::MAX);
+        self.clock_tm = false;
         if let Some(mt) = limits.movetime {
             let t = mt.saturating_sub(self.overhead_ms).max(1);
             self.soft_ms = t;
@@ -207,6 +214,7 @@ impl Searcher {
             let base = (time / mtg + inc * 3 / 4).min(time);
             self.soft_ms = (base * 6 / 10).max(1);
             self.hard_ms = (base * 3).min(time * 6 / 10).max(1);
+            self.clock_tm = true;
         }
     }
 
@@ -234,6 +242,8 @@ impl Searcher {
 
     fn eval(&self, b: &Board, ply: usize) -> i32 {
         let e = if nnue::active() { nnue::evaluate(&self.acc[ply], b.stm, b.occ().count_ones()) } else { evaluate(b) };
+        // Fade the eval towards a draw as the 50-move rule approaches.
+        let e = e * (200 - b.halfmove.min(100) as i32) / 200;
         e.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
@@ -349,6 +359,7 @@ impl Searcher {
         self.tt.new_search();
         self.killers = [[Move::NULL; 2]; MAX_PLY + 2];
         self.stack = [PlyInfo::default(); MAX_PLY + 4];
+        *self.root_nodes = [[0; 64]; 64];
         if self.hashes.last() != Some(&board.hash) {
             self.hashes.push(board.hash);
         }
@@ -364,6 +375,9 @@ impl Searcher {
         let mut best_score = 0;
         let max_depth = limits.depth.unwrap_or(MAX_PLY as i32 - 4).clamp(1, MAX_PLY as i32 - 4);
         let mut score = 0;
+        // Iterations in a row the best move has stayed the same.
+        let mut stable = 0usize;
+        let mut prev_best = Move::NULL;
 
         for depth in 1..=max_depth {
             let mut delta = 20;
@@ -406,7 +420,17 @@ impl Searcher {
                     pv.join(" ")
                 );
             }
-            if self.elapsed_ms() >= self.soft_ms || limits.soft_nodes.is_some_and(|n| self.nodes >= n) {
+            // On a clock, spend less time when the best move is stable and soaks up most of the
+            // nodes, more when the search keeps changing its mind.
+            stable = if best_move == prev_best { (stable + 1).min(6) } else { 0 };
+            prev_best = best_move;
+            let mut soft = self.soft_ms;
+            if self.clock_tm && depth >= 6 && self.nodes > 0 {
+                let frac = self.root_nodes[best_move.from()][best_move.to()] as f64 / self.nodes as f64;
+                let stab = [1.5, 1.25, 1.1, 1.0, 0.95, 0.9, 0.85][stable];
+                soft = ((soft as f64 * (1.5 - frac) * 1.35 * stab) as u64).min(self.hard_ms);
+            }
+            if self.elapsed_ms() >= soft || limits.soft_nodes.is_some_and(|n| self.nodes >= n) {
                 break;
             }
         }
@@ -539,6 +563,42 @@ impl Searcher {
                     return if s >= MATE_BOUND { beta } else { s };
                 }
             }
+            // ProbCut: a good capture that beats beta by a margin in a reduced search almost
+            // certainly beats beta in a full one.
+            let pc_beta = beta + 200;
+            if depth >= 5
+                && beta.abs() < MATE_BOUND
+                && !tt_entry.is_some_and(|e| e.depth >= depth - 3 && score_from_tt(e.score, ply) < pc_beta)
+            {
+                let mut list = MoveList::new();
+                b.gen_moves(&mut list, true);
+                let mut scores = [0i32; 256];
+                self.score_moves(b, &list, &mut scores, tt_move, ply);
+                for i in 0..list.len {
+                    let mv = Self::pick(&mut list, &mut scores, i);
+                    if !b.is_legal(mv) || !b.see(mv, pc_beta - static_eval) {
+                        continue;
+                    }
+                    let mut nb = *b;
+                    nb.make_move(mv);
+                    self.tt.prefetch(nb.hash);
+                    self.nnue_update(b, mv, ply);
+                    self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
+                    self.hashes.push(nb.hash);
+                    let mut s = -self.qsearch(&nb, -pc_beta, -pc_beta + 1, ply + 1);
+                    if s >= pc_beta {
+                        s = -self.negamax(&nb, depth - 4, -pc_beta, -pc_beta + 1, ply + 1, !cut_node);
+                    }
+                    self.hashes.pop();
+                    if self.stopped {
+                        return 0;
+                    }
+                    if s >= pc_beta && s.abs() < MATE_BOUND {
+                        self.tt.store(b.hash, mv, score_to_tt(s, ply), raw_eval, depth - 3, BOUND_LOWER);
+                        return s;
+                    }
+                }
+            }
         }
 
         // Internal iterative reduction: no TT move means this node was never searched well.
@@ -579,6 +639,10 @@ impl Searcher {
                     }
                     if !in_check && depth <= 8 && eval + 120 + 80 * depth <= alpha {
                         skip_quiets = true;
+                        continue;
+                    }
+                    // History pruning: quiet moves that have kept failing elsewhere.
+                    if !in_check && depth <= 4 && scores[i] < -2048 * depth {
                         continue;
                     }
                     if depth <= 8 && !b.see(mv, -50 * depth) {
@@ -623,6 +687,7 @@ impl Searcher {
             self.hashes.push(nb.hash);
             legal += 1;
             let new_depth = depth - 1 + ext;
+            let nodes_before = self.nodes;
 
             let score = if legal == 1 {
                 -self.negamax(&nb, new_depth, -beta, -alpha, ply + 1, false)
@@ -655,6 +720,9 @@ impl Searcher {
             self.hashes.pop();
             if self.stopped {
                 return 0;
+            }
+            if root {
+                self.root_nodes[mv.from()][mv.to()] += self.nodes - nodes_before;
             }
 
             if score > best {
