@@ -2,9 +2,9 @@
 # tournaments play (they need the CPU and the heat budget), many when the CPU is free.
 # Restarts are cheap: datagen resumes its counts and files exactly where it stopped.
 # The watchdog still pauses everything if temperatures get too high.
-# Usage (hidden, background): .\tools\datagen-adapt.ps1 [-Busy 6] [-Idle 14]
+# Usage (hidden, background): .\tools\datagen-adapt.ps1 [-Busy 4] [-Idle 14]
 param(
-    [int]$Busy = 6,
+    [int]$Busy = 4,
     [int]$Idle = 14,
     [string]$Name = 'gen3-v13-5k',
     [string]$Exe = 'pawnstorm-datagen-gen3',
