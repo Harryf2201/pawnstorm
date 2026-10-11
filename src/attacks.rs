@@ -1,5 +1,6 @@
 //! Attack tables. Knights, kings and pawns are computed at compile time; sliding pieces use
-//! PEXT-indexed lookup tables built once at startup by `init()`.
+//! lookup tables built once at startup by `init()`, indexed by PEXT where the CPU has it (BMI2)
+//! and by magic multiplication elsewhere.
 
 use crate::types::*;
 
@@ -77,58 +78,94 @@ fn relevant_mask(sq: usize, dirs: &[(i32, i32); 4]) -> u64 {
     mask
 }
 
+// Index into a slider's table. With BMI2 (x86 since Haswell/Zen 3) this is PEXT; elsewhere (e.g. ARM)
+// it is a "fancy magic" multiply-and-shift, with magics found by `find_magic` at startup.
+static mut ROOK_MAGIC: [u64; 64] = [0; 64];
+static mut BISHOP_MAGIC: [u64; 64] = [0; 64];
+
+#[cfg(target_feature = "bmi2")]
 #[inline(always)]
-fn pext(x: u64, mask: u64) -> u64 {
-    #[cfg(target_feature = "bmi2")]
-    unsafe {
-        core::arch::x86_64::_pext_u64(x, mask)
-    }
-    #[cfg(not(target_feature = "bmi2"))]
-    {
-        let (mut res, mut bb, mut m) = (0u64, 1u64, mask);
-        while m != 0 {
-            if x & m & m.wrapping_neg() != 0 {
-                res |= bb;
-            }
-            bb <<= 1;
-            m &= m - 1;
+fn index(occ: u64, mask: u64, _magic: u64) -> usize {
+    unsafe { core::arch::x86_64::_pext_u64(occ, mask) as usize }
+}
+
+#[cfg(not(target_feature = "bmi2"))]
+#[inline(always)]
+fn index(occ: u64, mask: u64, magic: u64) -> usize {
+    ((occ & mask).wrapping_mul(magic) >> (64 - mask.count_ones())) as usize
+}
+
+/// A multiplier that maps every occupancy subset of `mask` to a table slot without two subsets with
+/// different attacks colliding. Deterministic (fixed seed), so every machine builds the same tables.
+#[cfg(not(target_feature = "bmi2"))]
+fn find_magic(subsets: &[u64], attacks: &[u64], mask: u64, seed: &mut u64) -> u64 {
+    let bits = mask.count_ones();
+    let mut used = vec![0u64; 1 << bits];
+    let mut stamp = vec![0u32; 1 << bits];
+    let mut rand = || {
+        // xorshift64*
+        *seed ^= *seed >> 12;
+        *seed ^= *seed << 25;
+        *seed ^= *seed >> 27;
+        seed.wrapping_mul(0x2545F4914F6CDD1D)
+    };
+    for attempt in 1u32.. {
+        let magic = rand() & rand() & rand();
+        if (mask.wrapping_mul(magic) >> 56).count_ones() < 6 {
+            continue;
         }
-        res
+        let ok = subsets.iter().zip(attacks).all(|(&occ, &att)| {
+            let i = index(occ, mask, magic);
+            if stamp[i] != attempt {
+                stamp[i] = attempt;
+                used[i] = att;
+                true
+            } else {
+                used[i] == att
+            }
+        });
+        if ok {
+            return magic;
+        }
+    }
+    unreachable!()
+}
+
+/// Fills one slider's mask/offset/magic/table arrays for all 64 squares.
+unsafe fn init_slider(dirs: &[(i32, i32); 4], masks: *mut [u64; 64], offs: *mut [usize; 64], magics: *mut [u64; 64], table: *mut u64) {
+    let mut off = 0;
+    #[cfg(not(target_feature = "bmi2"))]
+    let mut seed = 0x9E3779B97F4A7C15u64;
+    for sq in 0..64 {
+        let mask = relevant_mask(sq, dirs);
+        let (mut subsets, mut attacks) = (Vec::new(), Vec::new());
+        let mut sub = 0u64;
+        loop {
+            subsets.push(sub);
+            attacks.push(slide(sq, sub, dirs));
+            sub = sub.wrapping_sub(mask) & mask;
+            if sub == 0 {
+                break;
+            }
+        }
+        #[cfg(not(target_feature = "bmi2"))]
+        let magic = find_magic(&subsets, &attacks, mask, &mut seed);
+        #[cfg(target_feature = "bmi2")]
+        let magic = 0;
+        (*masks)[sq] = mask;
+        (*offs)[sq] = off;
+        (*magics)[sq] = magic;
+        for (&occ, &att) in subsets.iter().zip(&attacks) {
+            *table.add(off + index(occ, mask, magic)) = att;
+        }
+        off += 1 << mask.count_ones();
     }
 }
 
 pub fn init() {
     unsafe {
-        let mut off = 0;
-        for sq in 0..64 {
-            let mask = relevant_mask(sq, &ROOK_DIRS);
-            ROOK_MASK[sq] = mask;
-            ROOK_OFF[sq] = off;
-            let mut sub = 0u64;
-            loop {
-                ROOK_TABLE[off + pext(sub, mask) as usize] = slide(sq, sub, &ROOK_DIRS);
-                sub = sub.wrapping_sub(mask) & mask;
-                if sub == 0 {
-                    break;
-                }
-            }
-            off += 1 << mask.count_ones();
-        }
-        let mut off = 0;
-        for sq in 0..64 {
-            let mask = relevant_mask(sq, &BISHOP_DIRS);
-            BISHOP_MASK[sq] = mask;
-            BISHOP_OFF[sq] = off;
-            let mut sub = 0u64;
-            loop {
-                BISHOP_TABLE[off + pext(sub, mask) as usize] = slide(sq, sub, &BISHOP_DIRS);
-                sub = sub.wrapping_sub(mask) & mask;
-                if sub == 0 {
-                    break;
-                }
-            }
-            off += 1 << mask.count_ones();
-        }
+        init_slider(&ROOK_DIRS, &raw mut ROOK_MASK, &raw mut ROOK_OFF, &raw mut ROOK_MAGIC, (&raw mut ROOK_TABLE).cast());
+        init_slider(&BISHOP_DIRS, &raw mut BISHOP_MASK, &raw mut BISHOP_OFF, &raw mut BISHOP_MAGIC, (&raw mut BISHOP_TABLE).cast());
         for a in 0..64 {
             for b in 0..64 {
                 if a == b {
@@ -148,12 +185,12 @@ pub fn init() {
 
 #[inline(always)]
 pub fn rook_attacks(sq: usize, occ: u64) -> u64 {
-    unsafe { ROOK_TABLE[ROOK_OFF[sq] + pext(occ, ROOK_MASK[sq]) as usize] }
+    unsafe { ROOK_TABLE[ROOK_OFF[sq] + index(occ, ROOK_MASK[sq], ROOK_MAGIC[sq])] }
 }
 
 #[inline(always)]
 pub fn bishop_attacks(sq: usize, occ: u64) -> u64 {
-    unsafe { BISHOP_TABLE[BISHOP_OFF[sq] + pext(occ, BISHOP_MASK[sq]) as usize] }
+    unsafe { BISHOP_TABLE[BISHOP_OFF[sq] + index(occ, BISHOP_MASK[sq], BISHOP_MAGIC[sq])] }
 }
 
 #[inline(always)]
