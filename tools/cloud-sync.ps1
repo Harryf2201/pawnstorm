@@ -166,6 +166,8 @@ while ($true) {
                 Log "WARNING from GitHub on run $($run.databaseId): $w - cloud sync stopped, no further batches."
                 Notify 'Pawnstorm: GitHub warning' "$w`nCloud sync stopped. Ask Claude to look at it."
                 Set-Content "$DataRoot\cloud-STOPPED.txt" $w
+                # End the never-ending chain (see datagen.yml) after the current batch.
+                gh variable set DATAGEN_FOREVER --body 0 2>&1 | Out-Null
                 $stop = $true
             }
         }
