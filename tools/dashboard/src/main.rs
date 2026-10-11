@@ -1526,17 +1526,54 @@ impl App {
         o
     }
 
+    /// Automatic jobs (scripts that train and rate versions on a schedule), from
+    /// training/jobs/<id>.txt written by tools/job-status.ps1. A job whose file has gone stale
+    /// without finishing is reported as "stopped" (its script died, e.g. the PC restarted).
+    fn jobs(&self) -> String {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(self.root.join("training").join("jobs")).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) != Some("txt") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&p).unwrap_or_default();
+            let mut f: BTreeMap<&str, &str> = text.lines().filter_map(|l| l.split_once('=')).collect();
+            let id = p.file_stem().and_then(|x| x.to_str()).unwrap_or("").to_string();
+            let updated: u64 = f.get("updated").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let state = f.get("state").copied().unwrap_or("waiting");
+            let finished = state == "done" || state == "failed";
+            // Finished jobs stay listed for a day; stalled ones are flagged.
+            if finished && now().saturating_sub(updated) > 86400 {
+                continue;
+            }
+            let stalled = !finished && now().saturating_sub(updated) > 300;
+            f.insert("state", if stalled { "stopped" } else { state });
+            out.push(format!(
+                "{{\"id\":{},\"title\":{},\"state\":{},\"detail\":{},\"start\":{},\"updated\":{}}}",
+                js(&id),
+                js(f.get("title").copied().unwrap_or(&id)),
+                js(f["state"]),
+                js(f.get("detail").copied().unwrap_or("")),
+                f.get("start").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0),
+                updated
+            ));
+        }
+        format!("[{}]", out.join(","))
+    }
+
     /// Which parts of the lab are running, judged from the heartbeat files each part keeps fresh.
     fn lab_state(&self) -> String {
         let age = |p: PathBuf| now().saturating_sub(mtime(&p));
         let watchdog = age(self.root.join("health").join("status.txt")) < 30;
         let sync = age(self.root.join("datagen").join("cloud-sync.heartbeat")) < 300;
-        let autotrain = age(self.root.join("training").join("auto-train.heartbeat")) < 300;
+        // oracle-sync.ps1 checks the Oracle server every 10 minutes.
+        let oracle = age(self.root.join("datagen").join("oracle-sync.heartbeat")) < 1300;
         let mut datagen = false;
         for e in std::fs::read_dir(self.root.join("datagen")).into_iter().flatten().flatten() {
             let st = e.path().join("status.txt");
             let text = std::fs::read_to_string(&st).unwrap_or_default();
-            if !text.contains("source=cloud") && text.contains("state=running") && age(st) < 15 {
+            // Only generators on this PC (cloud and Oracle status files carry a source= line).
+            if !text.contains("source=") && text.contains("state=running") && age(st) < 15 {
                 datagen = true;
             }
         }
@@ -1544,7 +1581,7 @@ impl App {
         let tail: Vec<String> = log.lines().rev().take(8).collect::<Vec<_>>().into_iter().rev().map(js).collect();
         let busy = self.lab_busy();
         format!(
-            "{{\"watchdog\":{watchdog},\"cloud_sync\":{sync},\"auto_train\":{autotrain},\"datagen\":{datagen},\"busy\":{},\"log\":[{}]}}",
+            "{{\"watchdog\":{watchdog},\"cloud_sync\":{sync},\"oracle_sync\":{oracle},\"datagen\":{datagen},\"busy\":{},\"log\":[{}]}}",
             js(&busy),
             tail.join(",")
         )
@@ -1689,13 +1726,7 @@ impl App {
             return ("200 OK", self.training(), "application/json");
         }
         if path == "/api/schedule" {
-            let text = std::fs::read_to_string(self.root.join("training").join("schedule.txt")).unwrap_or_default();
-            let fields: Vec<String> = text
-                .lines()
-                .filter_map(|l| l.split_once('='))
-                .map(|(k, v)| format!("{}:{}", js(k.trim()), js(v.trim())))
-                .collect();
-            return ("200 OK", format!("{{{}}}", fields.join(",")), "application/json");
+            return ("200 OK", self.jobs(), "application/json");
         }
         if path == "/api/datagen" {
             return ("200 OK", self.datagen(), "application/json");

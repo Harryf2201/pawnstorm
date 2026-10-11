@@ -566,6 +566,8 @@ function nowRows() {
   });
   const queued = gens.filter(g => g.source === 'cloud' && g.state === 'queued');
   if (queued.length) rows.push({ state: 'idle', icon: '☁️', t: `${queued.length} cloud batch${queued.length > 1 ? 'es' : ''} waiting in line`, d: 'Only one batch runs at a time.', go: 'lab' });
+  const nj = nextJob();
+  if (nj) rows.push({ state: nj.state === 'waiting' ? 'idle' : 'running', icon: '📅', t: `Automatic job: ${friendlyText(nj.title)}`, d: nj.state === 'waiting' && nj.start ? `Starts at ${hm(nj.start)}${nj.start > Date.now() / 1000 ? ' (in ' + dur(nj.start - Date.now() / 1000) + ')' : ''} · ${friendlyText(nj.detail)}` : friendlyText(nj.detail), go: 'lab' });
   preps.forEach(p => {
     const q = prepView(p), v = netVersion(p.name);
     rows.push({
@@ -593,7 +595,7 @@ function nowRows() {
 
 function labControls() {
   if (!lab) return '';
-  const parts = ['datagen', 'watchdog', 'cloud_sync', 'auto_train'];
+  const parts = ['datagen', 'watchdog', 'cloud_sync', 'oracle_sync'];
   const on = parts.filter(k => lab[k]).length;
   const paused = health && ['manual', 'warn', 'critical'].includes(health.level);
   let b = '';
@@ -1115,22 +1117,25 @@ function trainCard(t) {
   </div>`;
 }
 
+// ---- Automatic jobs (/api/schedule: scripts that train and rate versions on a schedule) ----
+const hm = t => new Date(t * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+const jobs = () => Array.isArray(schedule) ? schedule : [];
+const JOB_ORDER = { training: 0, preparing: 0, testing: 1, waiting: 2, stopped: 3, failed: 4, done: 5 };
+const nextJob = () => jobs().filter(j => !['done', 'failed', 'stopped'].includes(j.state)).sort((a, b) => (JOB_ORDER[a.state] - JOB_ORDER[b.state]) || (a.start - b.start))[0];
+const JOB_LABEL = { waiting: 'scheduled', preparing: 'preparing data', training: 'training', testing: 'testing', done: 'done', failed: 'failed', stopped: 'stopped' };
+
 function renderSchedule() {
-  const s = schedule;
-  if (!s || !s.status) return '';
-  const pos = Number(s.positions || 0), next = Number(s.next_milestone || 0);
-  const done = (s.done || '').split(',').filter(Boolean).map(Number);
-  const prev = done.length ? Math.max(...done.filter(d => d <= pos), 0) : 0;
-  const p = next ? Math.min(100, 100 * (pos - prev) / Math.max(1, next - prev)) : 100;
-  return `<div class="panel run">
-    <h3>📅 Automatic training schedule</h3>
-    <div class="sub" style="margin-top:4px">${lab && lab.auto_train ? 'A new version is trained and rated at every data milestone.' : 'Automatic training is switched off; the plan below is where it left off.'}</div>
-    <div class="cards">
-      <div class="card wide"><div class="k">Next milestone</div>
-        <div class="v">${next ? big(next) : '–'} <span class="sub" style="font-size:.55em">positions · now ${big(pos)}</span></div>
-        <div class="d">${esc(s.status)}</div><div class="bar big"><div style="width:${p}%"></div></div></div>
-      <div class="card"><div class="k">Versions trained this way</div><div class="v">${done.length}</div></div>
-    </div></div>`;
+  const list = jobs().slice().sort((a, b) => (JOB_ORDER[a.state] - JOB_ORDER[b.state]) || (a.start - b.start));
+  if (!list.length) return `<div class="panel run"><h3>📅 Automatic jobs</h3><div class="sub" style="margin-top:4px">Nothing is scheduled. New versions are set up to train and test themselves when there is enough new data; ask Claude to schedule one.</div></div>`;
+  const rows = list.map(j => {
+    const dot = j.state === 'done' ? 'finished' : ['failed', 'stopped'].includes(j.state) ? 'stopped' : j.state === 'waiting' ? 'idle' : 'running';
+    const when = j.state === 'waiting' && j.start ? `starts at ${hm(j.start)}${j.start > Date.now() / 1000 ? ' (in ' + dur(j.start - Date.now() / 1000) + ')' : ''}` : j.state === 'stopped' ? 'its script stopped running (e.g. the PC restarted); ask Claude to restart it' : `updated ${hm(j.updated)}`;
+    return `<div class="now-row" style="cursor:default"><span class="dot ${dot}" style="margin-top:7px"></span><div class="now-main">
+      <div class="now-t">${esc(friendlyText(j.title))} <span class="pill">${JOB_LABEL[j.state] || esc(j.state)}</span></div>
+      <div class="now-d">${esc(friendlyText(j.detail))}${j.detail ? ' · ' : ''}${when}</div></div></div>`;
+  }).join('');
+  return `<div class="panel run"><h3>📅 Automatic jobs</h3>
+    <div class="sub" style="margin-top:4px">Versions that train and test themselves on a schedule, so the lab keeps working while nobody is at the PC.</div>${rows}</div>`;
 }
 
 function renderTraining() {
@@ -1139,7 +1144,7 @@ function renderTraining() {
   const latest = rest[0];
   const older = rest.slice(1);
   const prepNames = preps.map(p => netVersion(p.name) || p.name).join(', ');
-  const sum = running.length ? 'training now' : preps.length ? 'preparing data for ' + esc(prepNames) : 'idle' + (schedule && schedule.next_milestone && lab && lab.auto_train ? ' · next at ' + big(Number(schedule.next_milestone)) + ' positions' : '');
+  const sum = running.length ? 'training now' : preps.length ? 'preparing data for ' + esc(prepNames) : 'idle' + (nextJob() ? ' · next: ' + esc(nextJob().title) + (nextJob().start > Date.now() / 1000 ? ' at ' + hm(nextJob().start) : '') : '');
   let body = `<p class="lead">A new version starts with its training data being prepared, then a neural network is trained on it using the graphics card. When it finishes, it becomes an engine version that is rated in a tournament.</p>` + renderSchedule();
   body += preps.map(prepCard).join('') + running.map(trainCard).join('') + (latest ? trainCard(latest) : '');
   if (older.length) {
@@ -1196,7 +1201,7 @@ function renderHealth() {
 
 function renderLab() {
   if (!lab) return '<div class="empty">Loading…</div>';
-  const parts = [['datagen', 'Data generation on this PC'], ['watchdog', 'Watchdog (temperature safety)'], ['cloud_sync', 'Cloud sync (downloads GitHub data)'], ['auto_train', 'Automatic training']];
+  const parts = [['datagen', 'Data generation on this PC'], ['watchdog', 'Watchdog (temperature safety)'], ['cloud_sync', 'Cloud sync (downloads GitHub data)'], ['oracle_sync', 'Oracle sync (collects data from the Oracle server)']];
   const on = parts.filter(([k]) => lab[k]).length;
   const status = lab.busy ? (lab.busy === 'start' ? 'Starting…' : 'Stopping…') : on === parts.length ? 'Everything is running' : on === 0 ? 'The lab is stopped' : `Partly running (${on} of ${parts.length})`;
   const top = `<div class="panel run">
@@ -1219,7 +1224,7 @@ async function doAction(what) {
   } else if (what === 'lab-start') {
     await post('/api/lab/start');
   } else if (what === 'lab-stop') {
-    if (!confirm('Stop the lab?\n\nData generation pauses (it resumes where it left off), any tournament in progress is cut short (finished games are kept), and the watchdog, cloud sync and auto-training stop. The dashboard stays open.')) return;
+    if (!confirm('Stop the lab?\n\nData generation pauses (it resumes where it left off), any tournament in progress is cut short (finished games are kept), and the watchdog and cloud/Oracle sync stop (the Oracle server keeps generating). Automatic training jobs keep their schedule. The dashboard stays open.')) return;
     const cloud = confirm('Also start a cloud batch on GitHub so data keeps coming in while the PC is off?\n\nOK = start one, Cancel = do not');
     await post(`/api/lab/stop${cloud ? '?cloud=1' : ''}`);
   }
@@ -1228,7 +1233,7 @@ async function doAction(what) {
 
 // ---- Rendering ----
 function renderHeader() {
-  const w = lab ? ['datagen', 'watchdog', 'cloud_sync', 'auto_train'] : [];
+  const w = lab ? ['datagen', 'watchdog', 'cloud_sync', 'oracle_sync'] : [];
   const on = w.filter(k => lab[k]).length;
   const label = !lab ? '' : lab.busy ? (lab.busy === 'start' ? 'Starting…' : 'Stopping…') : on === w.length ? 'Lab running' : on === 0 ? 'Lab stopped' : `Lab partly running`;
   const dot = !lab ? 'stopped' : lab.busy || on === w.length ? 'running' : on === 0 ? 'stopped' : 'finished';
