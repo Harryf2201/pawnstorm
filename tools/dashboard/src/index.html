@@ -534,8 +534,9 @@ function nowRows() {
       pct: r.total && r.type !== 'sprt' ? 100 * r.games / r.total : null, go: 'tournaments',
     });
   });
-  const genRun = gens.filter(g => g.state === 'running' && (g.source === 'cloud' || g.now - g.updated < 15));
-  const local = genRun.filter(g => g.source !== 'cloud'), cloud = genRun.filter(g => g.source === 'cloud');
+  const genRun = gens.filter(genRunning);
+  const local = genRun.filter(g => !g.source), cloud = genRun.filter(g => g.source === 'cloud');
+  genRun.filter(g => g.source === 'oracle').forEach(g => rows.push({ state: 'running', icon: '🖥️', t: 'Oracle Cloud server is generating training data', d: `${g.threads} cores, always on · about ${big(g.rate_h || 0)} per hour · ${big(g.positions)} positions collected so far`, go: 'lab' }));
   local.forEach(g => rows.push({ state: 'running', icon: '🧪', t: 'Generating training data on this PC', d: `${big(g.positions)} positions so far · about ${big(Math.round((g.rate || 0) * 3600))} per hour · the engine plays itself and keeps the positions`, go: 'lab' }));
   if (!local.length) rows.push({ state: 'idle', icon: '🧪', t: 'Training-data generation on this PC is off', d: lab && lab.datagen === false ? 'Use Start lab to resume it.' : '', go: 'lab' });
   cloud.forEach(g => {
@@ -887,6 +888,32 @@ function renderLocalGen(g) {
     </div></div>`;
 }
 
+// A generator counts as running while its status file is fresh: every few seconds for this PC,
+// every sync for the Oracle server (oracle-sync.ps1), always for GitHub (its jobs report on completion).
+function genRunning(g) {
+  if (g.state !== 'running') return false;
+  if (g.source === 'cloud') return true;
+  if (g.source === 'oracle') return g.now - g.updated < 2 * (g.sync_every || 600) + 60;
+  return g.now - g.updated < 15;
+}
+
+function renderOracle(g) {
+  const running = genRunning(g);
+  const state = running ? 'running' : 'stopped';
+  const wdl = g.white_wins + g.draws + g.black_wins || 1;
+  return `<div class="panel run">
+    <h3><span class="dot ${state}"></span>Oracle Cloud server <span class="pill">always on</span> <span class="pill">${state}</span></h3>
+    <div class="sub" style="margin-top:4px">${esc(g.host || 'Oracle Cloud ARM')} · ${big(g.soft_nodes)} nodes per move · keeps generating when this PC is off; data is collected every ${Math.round((g.sync_every || 600) / 60)} minutes</div>
+    <div class="cards">
+      <div class="card wide"><div class="k">Positions collected on this PC</div>
+        <div class="v">${big(g.positions)}</div>
+        <div class="d">+ ${big(g.pending || 0)} in the hour-long chunk being generated now</div></div>
+      <div class="card"><div class="k">Speed</div><div class="v">${big(g.rate_h || 0)}<span class="sub" style="font-size:.55em"> / hour</span></div><div class="d">${g.threads} cores</div></div>
+      <div class="card"><div class="k">Games played</div><div class="v">${big(g.games)}</div><div class="d">in collected chunks</div></div>
+      <div class="card"><div class="k">Results (white / draw / black)</div><div class="v" style="font-size:18px;margin-top:6px">${(100 * g.white_wins / wdl).toFixed(0)}% / <span class="sub">${(100 * g.draws / wdl).toFixed(0)}%</span> / ${(100 * g.black_wins / wdl).toFixed(0)}%</div></div>
+    </div></div>`;
+}
+
 function renderDatagen() {
   const totalPos = gens.reduce((s, g) => s + (g.positions || 0), 0);
   const stopped = gens.find(g => g.cloud_stopped);
@@ -896,11 +923,11 @@ function renderDatagen() {
   // The newest finished cloud batch stays visible; the rest are summarised.
   const newest = olderAll.slice().sort((a, b) => b.started - a.started)[0];
   const older = olderAll.filter(g => g !== newest);
-  const runningN = gens.filter(g => g.state === 'running' && (isCloud(g) || g.now - g.updated < 15)).length;
+  const runningN = gens.filter(genRunning).length;
   const sum = `${big(totalPos)} positions · ${runningN ? runningN + ' generator' + (runningN > 1 ? 's' : '') + ' running' : 'idle'}`;
   let body = `<p class="lead">The engine plays games against itself; each position, with the result, becomes training data for the next neural network. More (and better) data makes a stronger engine.</p>`;
   if (stopped) body += `<div class="warnbox" style="margin-bottom:12px">⛔ Cloud generation stopped because GitHub reported: ${esc(stopped.cloud_stopped)}</div>`;
-  body += recent.map(g => isCloud(g) ? renderCloud(g) : renderLocalGen(g)).join('');
+  body += recent.map(g => isCloud(g) ? renderCloud(g) : g.source === 'oracle' ? renderOracle(g) : renderLocalGen(g)).join('');
   if (newest) body += renderCloud(newest);
   if (older.length) {
     const pos = older.reduce((s, g) => s + (g.positions || 0), 0), failed = older.reduce((s, g) => s + (g.jobs_failed || 0), 0);

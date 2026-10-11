@@ -39,15 +39,19 @@ function Sync-Once {
             if ($k -eq 'started' -and ($first -eq 0 -or [int64]$v -lt $first)) { $first = [int64]$v }
         }
     }
-    $pending = 0; $threads = 0
+    $pending = 0; $threads = 0; $segStart = 0; $segUpdated = 0
     foreach ($line in $live) {
         if ($line -match '^positions=(\d+)') { $pending = [int64]$Matches[1] }
         if ($line -match '^threads=(\d+)') { $threads = [int]$Matches[1] }
+        if ($line -match '^started=(\d+)') { $segStart = [int64]$Matches[1] }
+        if ($line -match '^updated=(\d+)') { $segUpdated = [int64]$Matches[1] }
     }
+    # Positions per hour, from the segment being generated now.
+    $rate = if ($segUpdated -gt $segStart + 60) { [int64]($pending * 3600 / ($segUpdated - $segStart)) } else { 0 }
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     # positions = data already on this PC (what training uses); pending = in the server's current segment.
     $lines = @('source=oracle', "state=$(if ($live.Count) { 'running' } else { 'stopped' })", "started=$first", "updated=$now",
-        "threads=$threads", 'target=1000000000', 'soft_nodes=5000', "pending=$pending", "host=Oracle Cloud ARM ($threads cores)")
+        "threads=$threads", 'target=1000000000', 'soft_nodes=5000', "pending=$pending", "rate_h=$rate", "sync_every=$IntervalSeconds", "host=Oracle Cloud ARM ($threads cores)")
     foreach ($k in $sum.Keys) { $lines += "$k=$($sum[$k])" }
     [IO.File]::WriteAllLines("$dir\status.tmp", [string[]]$lines)
     Move-Item -Force "$dir\status.tmp" "$dir\status.txt"
