@@ -7,8 +7,14 @@
 //! The engine's src/nnue.rs HIDDEN / OUTPUT_BUCKETS must match the network it loads.
 
 use bullet_lib::{
-    game::{inputs::Chess768, outputs::MaterialCount},
-    nn::optimiser::AdamW,
+    game::{
+        inputs::{Chess768, ChessBucketsMirrored, get_num_buckets},
+        outputs::MaterialCount,
+    },
+    nn::{
+        InitSettings, Shape,
+        optimiser::{AdamW, AdamWParams},
+    },
     trainer::{
         save::SavedFormat,
         schedule::{TrainingSchedule, TrainingSteps, lr, wdl},
@@ -21,6 +27,20 @@ const SCALE: i32 = 400;
 const QA: i16 = 255;
 const QB: i16 = 64;
 
+/// King buckets by own-king square (files a-d; e-h are mirrored). Must match src/nnue.rs.
+#[rustfmt::skip]
+const KING_BUCKETS: [usize; 32] = [
+    0, 1, 2, 3,
+    4, 4, 5, 5,
+    6, 6, 6, 6,
+    7, 7, 7, 7,
+    8, 8, 8, 8,
+    8, 8, 8, 8,
+    9, 9, 9, 9,
+    9, 9, 9, 9,
+];
+const NUM_KING_BUCKETS: usize = get_num_buckets(&KING_BUCKETS);
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let net_id = args.get(1).cloned().unwrap_or_else(|| "net".into());
@@ -30,6 +50,8 @@ fn main() {
     let wdl_weight: f32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(0.4);
     let hidden: usize = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(512);
     let buckets: usize = args.get(7).and_then(|s| s.parse().ok()).unwrap_or(1);
+    // "768" = plain piece-square inputs; "kb10" = 10 mirrored king buckets (see BUCKET_LAYOUT).
+    let inputs = args.get(8).cloned().unwrap_or_else(|| "768".into());
 
     let schedule = TrainingSchedule {
         net_id,
@@ -47,9 +69,46 @@ fn main() {
     };
     let settings = LocalSettings { threads: 4, test_set: None, output_directory: &out, batch_queue_size: 64 };
     let data_loader = loader::DirectSequentialDataLoader::new(&[data.as_str()]);
-    println!("Architecture           : (768 -> {hidden})x2 -> {buckets}");
+    println!("Architecture           : ({inputs} -> {hidden})x2 -> {buckets}");
 
     // target = wdl * game_result + (1 - wdl) * sigmoid(score / SCALE)
+    if inputs == "kb10" {
+        assert_eq!(buckets, 1, "king buckets are only set up with a single output bucket");
+        // A shared "factoriser" (one 768-input copy added to every bucket) lets what is learned
+        // in one king bucket help the others; it is merged into the bucket weights when saving.
+        let mut trainer = ValueTrainerBuilder::default()
+            .dual_perspective()
+            .optimiser(AdamW)
+            .inputs(ChessBucketsMirrored::new(KING_BUCKETS))
+            .save_format(&[
+                SavedFormat::id("l0w")
+                    .transform(|store, weights| {
+                        let factoriser = store.get("l0f").values.f32().repeat(NUM_KING_BUCKETS);
+                        weights.into_iter().zip(factoriser).map(|(a, b)| a + b).collect()
+                    })
+                    .round()
+                    .quantise::<i16>(QA),
+                SavedFormat::id("l0b").round().quantise::<i16>(QA),
+                SavedFormat::id("l1w").round().quantise::<i16>(QB),
+                SavedFormat::id("l1b").round().quantise::<i16>(QA * QB),
+            ])
+            .loss_fn(|output, target| output.sigmoid().squared_error(target))
+            .build(|builder, stm_inputs, ntm_inputs| {
+                let l0f = builder.new_weights("l0f", Shape::new(hidden, 768), InitSettings::Zeroed);
+                let mut l0 = builder.new_affine("l0", 768 * NUM_KING_BUCKETS, hidden);
+                l0.weights = l0.weights + l0f.repeat(NUM_KING_BUCKETS);
+                let l1 = builder.new_affine("l1", 2 * hidden, 1);
+                let stm_hidden = l0.forward(stm_inputs).screlu();
+                let ntm_hidden = l0.forward(ntm_inputs).screlu();
+                l1.forward(stm_hidden.concat(ntm_hidden))
+            });
+        // Merged weights must still fit the quantisation range.
+        let clip = AdamWParams { max_weight: 0.99, min_weight: -0.99, ..Default::default() };
+        trainer.optimiser.set_params_for_weight("l0w", clip);
+        trainer.optimiser.set_params_for_weight("l0f", clip);
+        trainer.run(&schedule, &settings, &data_loader);
+        return;
+    }
     match buckets {
         1 => {
             let mut trainer = ValueTrainerBuilder::default()

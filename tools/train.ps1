@@ -1,5 +1,6 @@
 # Starts a GPU training run in the background, logging where the dashboard can see it.
-# Usage: .\tools\train.ps1 -Name net1 -Data gen1 [-Superbatches 40] [-Wdl 0.4]
+# Usage: .\tools\train.ps1 -Name net1 -Data gen1 [-Superbatches 40] [-Wdl 0.4] [-Inputs 768|kb10]
+#   -Inputs kb10 = 10 king buckets, mirrored (needs an engine built from the kb branch).
 param(
     [Parameter(Mandatory)][string]$Name,
     [Parameter(Mandatory)][string]$Data,
@@ -7,6 +8,7 @@ param(
     [double]$Wdl = 0.4,
     [int]$Hidden = 512,
     [int]$Buckets = 1,
+    [ValidateSet('768', 'kb10')][string]$Inputs = '768',
     [switch]$Build
 )
 
@@ -31,6 +33,6 @@ $dataPath = "$Root\data\$Data.bin"
 if (-not (Test-Path $dataPath)) { throw "No prepared data at $dataPath (run prepare-data.ps1)" }
 
 $p = Start-Process -FilePath "$trainer\target\release\trainer.exe" `
-    -ArgumentList $Name, $dataPath, "$dir\checkpoints", $Superbatches, $Wdl, $Hidden, $Buckets `
+    -ArgumentList $Name, $dataPath, "$dir\checkpoints", $Superbatches, $Wdl, $Hidden, $Buckets, $Inputs `
     -RedirectStandardOutput "$dir\log.txt" -RedirectStandardError "$dir\err.txt" -WindowStyle Hidden -PassThru
 "Training '$Name' started (pid $($p.Id)) -> $dir"
