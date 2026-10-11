@@ -675,7 +675,7 @@ function renderOverview(m) {
 function renderExperiments(m) {
   const rated = Object.fromEntries(m.pts.map(p => [p.key, p]));
   const exps = catalog.filter(c => !/^v\d+(\.\d+)+$/.test(c.name) && c.status !== 'planned')
-    .map(c => ({ c, p: rated[c.name], parent: rated[c.parent] })).filter(e => e.p && e.parent).reverse();
+    .map(c => ({ c, p: rated[c.name] || rated[c.became], parent: rated[c.parent] })).filter(e => e.p && e.parent).reverse();
   const planned = catalog.filter(c => !/^v\d+(\.\d+)+$/.test(c.name) && c.status === 'planned');
   if (!exps.length && !planned.length) return '';
   const open = isOpen('sec:experiments', true);
@@ -684,7 +684,7 @@ function renderExperiments(m) {
   const rows = exps.map(({ c, p, parent }) => {
     const d = p.perf - parent.perf, e = Math.hypot(p.err, parent.err);
     const tone = d - e > 0 ? 'good' : d + e < 0 ? 'bad' : 'same';
-    const verdict = c.status === 'failed' ? 'didn\'t help' : c.status === 'testing' ? (p.live ? 'testing now' : 'testing') : tone === 'good' ? 'better' : tone === 'bad' ? 'worse' : 'about the same';
+    const verdict = c.became ? `kept, became ${esc(c.became)}` : c.status === 'failed' ? 'didn\'t help' : c.status === 'testing' ? (p.live ? 'testing now' : 'testing') : tone === 'good' ? 'better' : tone === 'bad' ? 'worse' : 'about the same';
     return `<div class="xrow" data-go="versions"><div class="xname"><b>${esc(c.name)}</b> <span class="sub">${esc(c.title || '')}</span><div class="sub" style="font-size:12px">vs ${esc(c.parent)} · ${p.games} games · ${verdict}${p.live ? ' <span class="dot running" style="display:inline-block;vertical-align:middle"></span>' : ''}</div></div>
       <div class="xbar"><div class="xzero"></div><div class="xerr ${tone}" style="left:${x(d - e)}%;width:${x(d + e) - x(d - e)}%"></div><div class="xdot ${tone}" style="left:${x(d)}%"></div></div>
       <div class="xnum ${tone === 'good' ? 'pos' : tone === 'bad' ? 'neg' : ''}">${sign(d)}<span class="sub" style="font-size:11px"> ±${e.toFixed(0)}</span></div></div>`;

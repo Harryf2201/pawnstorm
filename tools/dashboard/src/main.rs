@@ -520,6 +520,8 @@ struct Version {
     network: String,
     data: String,
     summary: String,
+    /// Main version this experiment was promoted to (its games are rated under that version).
+    became: String,
 }
 
 /// `[section]` + `key = value` lines; `;` and `#` start comments. Sections keep file order.
@@ -546,6 +548,7 @@ fn parse_versions(text: &str) -> Vec<Version> {
             "network" => v.network = val,
             "data" => v.data = val,
             "summary" => v.summary = val,
+            "became" => v.became = val,
             _ => {}
         }
     }
@@ -1056,7 +1059,7 @@ impl App {
             .iter()
             .map(|v| {
                 format!(
-                    "{{\"name\":{},\"title\":{},\"engines\":[{}],\"status\":{},\"date\":{},\"parent\":{},\"branch\":{},\"network\":{},\"data\":{},\"summary\":{}}}",
+                    "{{\"name\":{},\"title\":{},\"engines\":[{}],\"status\":{},\"date\":{},\"parent\":{},\"branch\":{},\"network\":{},\"data\":{},\"summary\":{},\"became\":{}}}",
                     js(&v.name),
                     js(&v.title),
                     v.engines.iter().map(|e| js(e)).collect::<Vec<_>>().join(","),
@@ -1066,7 +1069,8 @@ impl App {
                     js(&v.branch),
                     js(&v.network),
                     js(&v.data),
-                    js(&v.summary)
+                    js(&v.summary),
+                    js(&v.became)
                 )
             })
             .collect();
