@@ -249,10 +249,10 @@ impl Searcher {
 
     /// Fills the accumulators for ply + 1 after `mv` is played from `b` at `ply`.
     #[inline(always)]
-    fn nnue_update(&mut self, b: &Board, mv: Move, ply: usize) {
+    fn nnue_update(&mut self, b: &Board, after: &Board, mv: Move, ply: usize) {
         if nnue::active() {
             let (parent, child) = self.acc.split_at_mut(ply + 1);
-            nnue::update(b, mv, &parent[ply], &mut child[0]);
+            nnue::update(b, after, mv, &parent[ply], &mut child[0]);
         }
     }
 
@@ -679,7 +679,7 @@ impl Searcher {
             let mut nb = *b;
             nb.make_move(mv);
             self.tt.prefetch(nb.hash);
-            self.nnue_update(b, mv, ply);
+            self.nnue_update(b, &nb, mv, ply);
             if ext == 0 && nb.in_check() {
                 ext = 1;
             }
@@ -871,7 +871,7 @@ impl Searcher {
             let mut nb = *b;
             nb.make_move(mv);
             self.tt.prefetch(nb.hash);
-            self.nnue_update(b, mv, ply);
+            self.nnue_update(b, &nb, mv, ply);
             legal += 1;
             self.hashes.push(nb.hash);
             let score = -self.qsearch(&nb, -beta, -alpha, ply + 1);
