@@ -285,7 +285,7 @@ const big = n => n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (n / 1e6).to
 const pct = (w, d, n) => n ? 100 * (w + d / 2) / n : null;
 
 // ---- UI state (remembered between visits) ----
-const TABS = [['overview', 'Overview', '🏠'], ['versions', 'Versions', '📈'], ['championship', 'Championship', '🏁'], ['tournaments', 'Tournaments', '⚔️'], ['achievements', 'Achievements', '🏆'], ['lab', 'Lab', '🔧']];
+const TABS = [['overview', 'Overview', '🏠'], ['versions', 'Versions', '📈'], ['championship', 'Championship', '🏁'], ['tournaments', 'Tournaments', '⚔️'], ['achievements', 'Achievements', '🏆'], ['data', 'Data', '🧬'], ['lab', 'Lab', '🔧']];
 const ui = { state: {}, sort: 'new', group: 'cat' };
 try { const s = JSON.parse(localStorage.getItem('pawn-ui') || '{}'); Object.assign(ui, s); } catch (e) {}
 const saveUi = () => { try { localStorage.setItem('pawn-ui', JSON.stringify({ state: ui.state, sort: ui.sort, group: ui.group })); } catch (e) {} };
@@ -375,7 +375,7 @@ const isOurs = n => !!aliasMap[ekey(n)] || /^pawnstorm/i.test(n);
 /// "v1.2 · Gen2, 260M": the version name plus its title from versions.ini (other engines: just the name).
 const label = n => { const s = short(n), t = titleMap[s]; return t ? s + ' · ' + t : s; };
 /// Main versions are plain numbers (v1.3); experiments add a letter (v1.2k). Dropped and planned ones aren't main.
-const isMajor = name => { const c = catalog.find(v => v.name === name); return /^v\d+(\.\d+)+$/.test(name) && !(c && ['failed', 'planned'].includes(c.status)); };
+const isMajor = name => { const c = catalog.find(v => v.name === name); return /^v\d+(\.\d+)+$/.test(name) && !(c && ['failed', 'planned', 'testing', 'shelved'].includes(c.status)); };
 
 /// Everything about the engine versions, derived from the server's joint rating fit.
 function versionModel() {
@@ -433,6 +433,7 @@ const STATUS = {
   testing: ['info', 'Testing'],
   passed: ['good', '✓ Passed'],
   failed: ['bad', '✗ Failed'],
+  shelved: ['warn', 'Shelved'],
   planned: ['plan', 'Planned'],
 };
 const statusChip = s => { const [c, t] = STATUS[s] || ['', s || 'Unlisted']; return `<span class="chip ${c}">${esc(t)}</span>`; };
@@ -675,7 +676,7 @@ function renderOverview(m) {
 function renderExperiments(m) {
   const rated = Object.fromEntries(m.pts.map(p => [p.key, p]));
   const exps = catalog.filter(c => !/^v\d+(\.\d+)+$/.test(c.name) && c.status !== 'planned')
-    .map(c => ({ c, p: rated[c.name], parent: rated[c.parent] })).filter(e => e.p && e.parent).reverse();
+    .map(c => ({ c, p: rated[c.name] || rated[c.became], parent: rated[c.parent] })).filter(e => e.p && e.parent).reverse();
   const planned = catalog.filter(c => !/^v\d+(\.\d+)+$/.test(c.name) && c.status === 'planned');
   if (!exps.length && !planned.length) return '';
   const open = isOpen('sec:experiments', true);
@@ -684,7 +685,7 @@ function renderExperiments(m) {
   const rows = exps.map(({ c, p, parent }) => {
     const d = p.perf - parent.perf, e = Math.hypot(p.err, parent.err);
     const tone = d - e > 0 ? 'good' : d + e < 0 ? 'bad' : 'same';
-    const verdict = c.status === 'failed' ? 'didn\'t help' : c.status === 'testing' ? (p.live ? 'testing now' : 'testing') : tone === 'good' ? 'better' : tone === 'bad' ? 'worse' : 'about the same';
+    const verdict = c.became ? `kept, became ${esc(c.became)}` : c.status === 'failed' ? 'didn\'t help' : c.status === 'shelved' ? 'shelved, not clear yet' : c.status === 'testing' ? (p.live ? 'testing now' : 'testing') : tone === 'good' ? 'better' : tone === 'bad' ? 'worse' : 'about the same';
     return `<div class="xrow" data-go="versions"><div class="xname"><b>${esc(c.name)}</b> <span class="sub">${esc(c.title || '')}</span><div class="sub" style="font-size:12px">vs ${esc(c.parent)} · ${p.games} games · ${verdict}${p.live ? ' <span class="dot running" style="display:inline-block;vertical-align:middle"></span>' : ''}</div></div>
       <div class="xbar"><div class="xzero"></div><div class="xerr ${tone}" style="left:${x(d - e)}%;width:${x(d + e) - x(d - e)}%"></div><div class="xdot ${tone}" style="left:${x(d)}%"></div></div>
       <div class="xnum ${tone === 'good' ? 'pos' : tone === 'bad' ? 'neg' : ''}">${sign(d)}<span class="sub" style="font-size:11px"> ±${e.toFixed(0)}</span></div></div>`;
@@ -1062,28 +1063,114 @@ function renderOracle(g) {
     </div></div>`;
 }
 
-function renderDatagen() {
-  const totalPos = gens.reduce((s, g) => s + (g.positions || 0), 0);
-  const stopped = gens.find(g => g.cloud_stopped);
-  const isCloud = g => g.source === 'cloud';
-  const recent = gens.filter(g => !isCloud(g) || g.state === 'running' || g.state === 'queued');
-  const olderAll = gens.filter(g => isCloud(g) && g.state !== 'running' && g.state !== 'queued');
-  // The newest finished cloud batch stays visible; the rest are summarised.
-  const newest = olderAll.slice().sort((a, b) => b.started - a.started)[0];
-  const older = olderAll.filter(g => g !== newest);
-  const runningN = gens.filter(genRunning).length;
-  const sum = `${big(totalPos)} positions · ${runningN ? runningN + ' generator' + (runningN > 1 ? 's' : '') + ' running' : 'idle'}`;
-  let body = `<p class="lead">The engine plays games against itself; each position, with the result, becomes training data for the next neural network. More (and better) data makes a stronger engine.</p>`;
-  if (stopped) body += `<div class="warnbox" style="margin-bottom:12px">⛔ Cloud generation stopped because GitHub reported: ${esc(stopped.cloud_stopped)}</div>`;
-  body += recent.map(g => isCloud(g) ? renderCloud(g) : g.source === 'oracle' ? renderOracle(g) : renderLocalGen(g)).join('');
-  if (newest) body += renderCloud(newest);
-  if (older.length) {
-    const pos = older.reduce((s, g) => s + (g.positions || 0), 0), failed = older.reduce((s, g) => s + (g.jobs_failed || 0), 0);
-    const open = isOpen('older-cloud');
-    body += `<div class="panel run"><div class="now-row" data-toggle="older-cloud" style="border:0"><span class="chev2">${open ? '▾' : '▸'}</span><div class="now-main"><div class="now-t">${older.length} earlier cloud batch${older.length > 1 ? 'es' : ''}</div><div class="now-d">${big(pos)} positions in total${failed ? ' · ' + failed + ' failed jobs' : ''}</div></div></div></div>`;
-    if (open) body += older.sort((a, b) => b.started - a.started).map(renderCloud).join('');
+// Lab keeps a one-line pointer; the details live on the Data tab.
+function renderDataLink() {
+  if (!gens.length) return '';
+  const total = gens.reduce((s, g) => s + (g.positions || 0), 0), n = gens.filter(genRunning).length;
+  return `<div class="panel" style="margin-top:12px"><div class="now-row" data-go="data" style="border:0"><div class="now-main"><div class="now-t">Training data: ${big(total)} positions</div><div class="now-d">${n ? n + ' generator' + (n > 1 ? 's' : '') + ' running' : 'nothing generating'} · details by generation and source on the Data tab</div></div><span class="sub">›</span></div></div>`;
+}
+
+// ---- Data tab: training data by generation (which network played the games) and by source ----
+const GEN_INFO = {
+  1: { net: 'hand-written eval (PeSTO)', used: 'v0.2 – v0.8.1', note: 'retired: mixing it in made v1.2b weaker' },
+  2: { net: 'v0.8 network', used: 'v1.0 – v1.5' },
+  3: { net: 'v1.3 network', used: 'the next network' },
+};
+const SOURCES = [['local', 'This PC'], ['oracle', 'Oracle server'], ['cloud', 'GitHub cloud']];
+const genOf = g => +g.gen || +((g.name.match(/^(?:oracle-)?gen(\d+)/) || [])[1]) || (g.eval === 'nnue' ? 2 : 1);
+const srcOf = g => g.source === 'cloud' || g.source === 'oracle' ? g.source : 'local';
+
+/// Positions per hour a generator is adding right now (0 when stopped), plus positions made but not yet on this PC.
+function genFlow(g) {
+  if (!genRunning(g) || g.state === 'queued') return { rate: 0, pending: 0 };
+  if (srcOf(g) === 'oracle') return { rate: g.rate_h || 0, pending: g.pending || 0 };
+  if (srcOf(g) === 'cloud') {
+    const total = g.jobs_total || 0, got = g.jobs_downloaded || 0, secs = (g.minutes || 330) * 60;
+    const perJob = (got ? g.positions / got : null) || g.est_per_job || 0;
+    const left = total - got, elapsed = g.now - g.started;
+    return { rate: perJob * left / secs * 3600, pending: Math.round(perJob * left * Math.min(1, elapsed / secs)) };
   }
-  return gens.length ? section('sec:datagen', 'Training data', sum, body, true) : '';
+  const secs = Math.max(1, g.updated - g.started);
+  return { rate: g.rate ? g.rate * 3600 : g.positions / secs * 3600, pending: 0 };
+}
+
+function renderData() {
+  if (!gens.length) return '<h2 style="margin-top:4px">Data</h2><div class="panel sub">No data generation found yet.</div>';
+  const ids = [...new Set(gens.map(genOf))].sort((a, b) => b - a);
+  const newestGen = ids[0];
+  const cell = (gen, src) => gens.filter(g => genOf(g) === gen && (!src || srcOf(g) === src));
+  const sumPos = list => list.reduce((s, g) => s + (g.positions || 0), 0);
+  const sumFlow = list => list.map(genFlow).reduce((a, f) => ({ rate: a.rate + f.rate, pending: a.pending + f.pending }), { rate: 0, pending: 0 });
+  const sumBytes = list => list.reduce((s, g) => s + (g.bytes || 0), 0);
+  const grand = sumPos(gens);
+
+  // One card per generation.
+  const cards = ids.map(gen => {
+    const all = cell(gen), pos = sumPos(all), fl = sumFlow(all), info = GEN_INFO[gen] || {};
+    return `<div class="card ${gen === newestGen ? 'wide' : ''}"><div class="k">Gen${gen} · ${esc(info.net || '')}</div>
+      <div class="v">${big(pos)}</div>
+      <div class="d">${fl.rate ? `<span class="pos">+${big(Math.round(fl.rate))} / hour</span>${fl.pending ? ` · ~${big(fl.pending)} more being made` : ''}` : 'not being generated'}</div>
+      <div class="d">${info.used ? 'trains ' + esc(info.used) : ''}${info.note ? ' · ' + esc(info.note) : ''}</div></div>`;
+  }).join('');
+
+  // Generation x source table, with a bar showing each source's share.
+  const colors = { local: 'var(--accent)', oracle: 'var(--good)', cloud: 'var(--warn)' };
+  const rows = ids.map(gen => {
+    const tot = sumPos(cell(gen)) || 1;
+    const cols = SOURCES.map(([s]) => {
+      const list = cell(gen, s), pos = sumPos(list), fl = sumFlow(list);
+      const txt = !list.length ? '<span class="sub">–</span>' : !pos && list.every(g => g.state === 'queued') ? '<span class="sub">queued</span>' : big(pos);
+      return `<td class="num">${txt}${fl.rate ? `<div class="sub" style="font-size:11px">+${big(Math.round(fl.rate))}/h</div>` : ''}</td>`;
+    }).join('');
+    const bar = SOURCES.map(([s]) => `<div title="${s}" style="width:${100 * sumPos(cell(gen, s)) / tot}%;background:${colors[s]}"></div>`).join('');
+    return `<tr><td><b>Gen${gen}</b><div class="sub" style="font-size:11px">${esc((GEN_INFO[gen] || {}).net || '')}</div></td>${cols}
+      <td class="num"><b>${big(sumPos(cell(gen)))}</b><div class="sub" style="font-size:11px">${(sumBytes(cell(gen)) / 1e9).toFixed(1)} GB</div></td>
+      <td style="min-width:90px"><div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--border)">${bar}</div></td></tr>`;
+  }).join('');
+  const legend = SOURCES.map(([s, n]) => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px"><span style="width:10px;height:10px;border-radius:3px;background:${colors[s]}"></span>${n}</span>`).join('');
+  const table = `<div class="panel" style="overflow-x:auto"><table class="cl">
+      <thead><tr><th style="text-align:left">Generation</th>${SOURCES.map(([, n]) => `<th class="num">${n}</th>`).join('')}<th class="num">Total</th><th>Share</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+      <div class="sub" style="font-size:12px;margin-top:10px">${legend}</div></div>`;
+
+  // Production now and when the newest generation reaches the next milestones.
+  const nowList = cell(newestGen), fl = sumFlow(nowList), have = sumPos(nowList) + fl.pending;
+  const perSrc = SOURCES.map(([s, n]) => { const f = sumFlow(cell(newestGen, s)); return `<div class="card"><div class="k">${n}</div><div class="v">${f.rate ? big(Math.round(f.rate)) : '–'}<span class="sub" style="font-size:.55em">${f.rate ? ' / hour' : ''}</span></div><div class="d">${f.rate ? 'gen' + newestGen : 'idle or queued'}</div></div>`; }).join('');
+  const marks = [50e6, 100e6, 150e6, 200e6, 300e6, 500e6].filter(m => m > have).slice(0, 3);
+  const eta = fl.rate ? marks.map(m => { const h = (m - have) / fl.rate; const at = new Date(Date.now() + h * 3600e3); return `<div class="now-row"><div class="now-main"><div class="now-t">${big(m)} gen${newestGen} positions</div><div class="now-d">in about ${dur(h * 3600)} · around ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${at.getDate() !== new Date().getDate() ? ' tomorrow' : ''}</div></div></div>`; }).join('') : '<div class="sub">Nothing is generating right now.</div>';
+  const queued = gens.filter(g => g.state === 'queued').map(g => `GitHub batch ${esc(g.run_id)} (gen${genOf(g)}) is queued and starts when the current batch finishes.`).join(' ');
+  const prod = `<div class="cards">${perSrc}<div class="card"><div class="k">All sources</div><div class="v">${big(Math.round(fl.rate))}<span class="sub" style="font-size:.55em"> / hour</span></div><div class="d">${big(have)} gen${newestGen} so far, counting data still on the servers</div></div></div>
+    <div class="panel" style="margin-top:12px">${eta}${queued ? `<div class="sub" style="font-size:12px;margin-top:8px">${queued}</div>` : ''}</div>`;
+
+  // Details: one section per generation, each split by source.
+  const details = ids.map(gen => {
+    const info = GEN_INFO[gen] || {};
+    let body = '';
+    for (const [s, n] of SOURCES) {
+      const list = cell(gen, s).sort((a, b) => (b.started || 0) - (a.started || 0));
+      if (!list.length) continue;
+      body += `<h3 style="margin:14px 0 6px">${n} <span class="sub" style="font-weight:normal">· ${big(sumPos(list))} positions${list.length > 1 ? ' · ' + list.length + (s === 'cloud' ? ' batches' : ' runs') : ''}</span></h3>`;
+      if (s === 'cloud') {
+        const live = list.filter(g => g.state === 'running' || g.state === 'queued'), done = list.filter(g => !live.includes(g));
+        body += live.map(renderCloud).join('');
+        if (done.length) {
+          const key = `data-cloud-${gen}`, open = isOpen(key), failed = done.reduce((t, g) => t + (g.jobs_failed || 0), 0);
+          body += `<div class="panel run"><div class="now-row" data-toggle="${key}" style="border:0"><span class="chev2">${open ? '▾' : '▸'}</span><div class="now-main"><div class="now-t">${done.length} finished batch${done.length > 1 ? 'es' : ''}</div><div class="now-d">${big(sumPos(done))} positions${failed ? ' · ' + failed + ' failed jobs' : ''}</div></div></div></div>`;
+          if (open) body += done.map(renderCloud).join('');
+        }
+      } else {
+        body += list.map(s === 'oracle' ? renderOracle : renderLocalGen).join('');
+      }
+    }
+    return section(`sec:data-gen${gen}`, `Gen${gen} · ${info.net || ''}`, `${big(sumPos(cell(gen)))} positions`, body, gen === newestGen);
+  }).join('');
+
+  return `<h2 style="margin-top:4px">Training data</h2>
+    <p class="lead">Each generation is made by a different engine playing itself; better engines make better data. ${big(grand)} positions in total.</p>
+    <div class="cards">${cards}</div>
+    <h2 class="sec" style="cursor:default">By generation and source</h2>${table}
+    <h2 class="sec" style="cursor:default">Production now</h2>${prod}
+    ${details}`;
 }
 
 // ---- Version build pipeline: prepare the data (3 steps) -> train on the GPU -> rating tournament ----
@@ -1263,7 +1350,7 @@ function renderLab() {
     ${parts.map(([k, n]) => `<div class="now-row" style="cursor:default"><span class="dot ${lab[k] ? 'running' : 'stopped'}"></span><div class="now-main"><div class="now-t" style="${lab[k] ? '' : 'color:var(--muted);font-weight:500'}">${n}</div></div><span class="sub">${lab[k] ? 'on' : 'off'}</span></div>`).join('')}
     ${lab.log && lab.log.length && lab.log_time && Date.now() / 1000 - lab.log_time < 6 * 3600 ? `<div class="sub" style="margin-top:10px;font-size:12px;white-space:pre-wrap">Last start/stop from the dashboard (${when(lab.log_time)}):\n${esc(lab.log.join('\n'))}</div>` : ''}
   </div>`;
-  return `<h2 style="margin-top:4px">Lab</h2>` + top + renderHealth() + renderDatagen() + renderTraining();
+  return `<h2 style="margin-top:4px">Lab</h2>` + top + renderHealth() + renderDataLink() + renderTraining();
 }
 
 // ---- Actions (POST + custom header, which other websites can't send to this server) ----
@@ -1305,7 +1392,7 @@ function render() {
   const m = versionModel();
   renderHeader();
   if (!loaded) { setHtml($('#view'), '<div class="empty">Loading…</div>'); return; }
-  const html = { overview: () => renderOverview(m), versions: () => renderVersions(m), championship: renderChampionship, tournaments: renderTournaments, achievements: () => renderAchievements(m), lab: renderLab }[tab]();
+  const html = { overview: () => renderOverview(m), versions: () => renderVersions(m), championship: renderChampionship, tournaments: renderTournaments, achievements: () => renderAchievements(m), data: renderData, lab: renderLab }[tab]();
   setHtml($('#view'), html);
   document.title = (m.strongest ? `${m.strongest.perf.toFixed(0)} · ` : '') + 'Pawnstorm Lab';
 }

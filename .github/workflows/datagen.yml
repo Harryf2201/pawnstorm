@@ -89,10 +89,12 @@ jobs:
 
   # Starts the next batch in a chain. Runs only if every generate job succeeded, so any failure,
   # cancellation or throttling ends the chain. The new run waits in the concurrency queue until
-  # this one has fully finished, so batches never overlap.
+  # this one has fully finished, so batches never overlap. With the repository variable
+  # DATAGEN_FOREVER = 1 the chain never runs out (set it to 0 to stop after the current batch;
+  # tools\cloud-sync.ps1 does that itself if GitHub ever warns about usage).
   next:
     needs: generate
-    if: ${{ success() && inputs.chain != '' && inputs.chain != '0' }}
+    if: ${{ success() && ((inputs.chain != '' && inputs.chain != '0') || vars.DATAGEN_FOREVER == '1') }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -100,7 +102,8 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          remaining=$(( ${{ inputs.chain }} - 1 ))
+          remaining=$(( ${{ inputs.chain || 0 }} - 1 ))
+          if [ "$remaining" -lt 0 ]; then remaining=0; fi
           echo "starting the next batch ($remaining more after it)"
           gh workflow run datagen.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" \
             -f jobs=${{ inputs.jobs }} -f minutes=${{ inputs.minutes }} -f soft_nodes=${{ inputs.soft_nodes }} -f chain=$remaining -f eval=${{ inputs.eval }}

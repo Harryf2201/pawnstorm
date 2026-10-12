@@ -60,8 +60,15 @@ pub struct Searcher {
     pv: Box<[[Move; MAX_PLY + 1]; MAX_PLY + 1]>,
     pv_len: [usize; MAX_PLY + 1],
     lmr: [[i32; 64]; 64],
+    /// Correction history: per side to move and pawn structure, how far the static eval has
+    /// tended to be from the search result (in 1/CORR_GRAIN pawns-of-centipawns).
+    corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// NNUE accumulators per ply.
     acc: Vec<AccPair>,
+    /// Nodes spent below each root move (from, to) in this search, for time management.
+    root_nodes: Box<[[u64; 64]; 64]>,
+    /// Whether the soft limit comes from a game clock (and may be stretched or shortened).
+    clock_tm: bool,
     start: Instant,
     soft_ms: u64,
     hard_ms: u64,
@@ -69,6 +76,25 @@ pub struct Searcher {
     stopped: bool,
     pub print: bool,
     pub overhead_ms: u64,
+}
+
+const CORR_SIZE: usize = 16384;
+const CORR_GRAIN: i32 = 256;
+const CORR_WEIGHT_SCALE: i32 = 256;
+const CORR_MAX: i32 = CORR_GRAIN * 32;
+
+/// Hash of the pawn structure (both colors), for the correction history.
+#[inline(always)]
+fn pawn_key(b: &Board) -> usize {
+    let mix = |mut x: u64| {
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51afd7ed558ccd);
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+        x ^ (x >> 33)
+    };
+    let p = b.pieces[PAWN];
+    (mix(p & b.colors[WHITE]) ^ mix((p & b.colors[BLACK]).rotate_left(17) ^ 0x9E3779B97F4A7C15)) as usize % CORR_SIZE
 }
 
 #[inline(always)]
@@ -129,7 +155,10 @@ impl Searcher {
             pv: Box::new([[Move::NULL; MAX_PLY + 1]; MAX_PLY + 1]),
             pv_len: [0; MAX_PLY + 1],
             lmr,
+            corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             acc: vec![[Accumulator { vals: [0; nnue::HIDDEN] }; 2]; MAX_PLY + 8],
+            root_nodes: Box::new([[0; 64]; 64]),
+            clock_tm: false,
             start: Instant::now(),
             soft_ms: u64::MAX,
             hard_ms: u64::MAX,
@@ -146,6 +175,23 @@ impl Searcher {
         self.cont1.fill(0);
         self.cont2.fill(0);
         self.killers = [[Move::NULL; 2]; MAX_PLY + 2];
+        for side in self.corr.iter_mut() {
+            side.fill(0);
+        }
+    }
+
+    /// The static eval adjusted by the correction history.
+    #[inline(always)]
+    fn corrected(&self, b: &Board, raw: i32) -> i32 {
+        (raw + self.corr[b.stm][pawn_key(b)] / CORR_GRAIN).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+    }
+
+    /// Moves the correction for this pawn structure towards (search score - raw static eval).
+    fn update_corr(&mut self, b: &Board, raw: i32, score: i32, depth: i32) {
+        let e = &mut self.corr[b.stm][pawn_key(b)];
+        let diff = (score - raw) * CORR_GRAIN;
+        let w = (depth + 1).min(16);
+        *e = ((*e * (CORR_WEIGHT_SCALE - w) + diff * w) / CORR_WEIGHT_SCALE).clamp(-CORR_MAX, CORR_MAX);
     }
 
     fn elapsed_ms(&self) -> u64 {
@@ -156,6 +202,7 @@ impl Searcher {
         self.soft_ms = u64::MAX;
         self.hard_ms = u64::MAX;
         self.node_limit = limits.nodes.unwrap_or(u64::MAX);
+        self.clock_tm = false;
         if let Some(mt) = limits.movetime {
             let t = mt.saturating_sub(self.overhead_ms).max(1);
             self.soft_ms = t;
@@ -167,6 +214,7 @@ impl Searcher {
             let base = (time / mtg + inc * 3 / 4).min(time);
             self.soft_ms = (base * 6 / 10).max(1);
             self.hard_ms = (base * 3).min(time * 6 / 10).max(1);
+            self.clock_tm = true;
         }
     }
 
@@ -194,6 +242,8 @@ impl Searcher {
 
     fn eval(&self, b: &Board, ply: usize) -> i32 {
         let e = if nnue::active() { nnue::evaluate(&self.acc[ply], b.stm, b.occ().count_ones()) } else { evaluate(b) };
+        // Fade the eval towards a draw as the 50-move rule approaches.
+        let e = e * (200 - b.halfmove.min(100) as i32) / 200;
         e.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
@@ -309,6 +359,7 @@ impl Searcher {
         self.tt.new_search();
         self.killers = [[Move::NULL; 2]; MAX_PLY + 2];
         self.stack = [PlyInfo::default(); MAX_PLY + 4];
+        *self.root_nodes = [[0; 64]; 64];
         if self.hashes.last() != Some(&board.hash) {
             self.hashes.push(board.hash);
         }
@@ -324,6 +375,9 @@ impl Searcher {
         let mut best_score = 0;
         let max_depth = limits.depth.unwrap_or(MAX_PLY as i32 - 4).clamp(1, MAX_PLY as i32 - 4);
         let mut score = 0;
+        // Iterations in a row the best move has stayed the same.
+        let mut stable = 0usize;
+        let mut prev_best = Move::NULL;
 
         for depth in 1..=max_depth {
             let mut delta = 20;
@@ -366,7 +420,17 @@ impl Searcher {
                     pv.join(" ")
                 );
             }
-            if self.elapsed_ms() >= self.soft_ms || limits.soft_nodes.is_some_and(|n| self.nodes >= n) {
+            // On a clock, spend less time when the best move is stable and soaks up most of the
+            // nodes, more when the search keeps changing its mind.
+            stable = if best_move == prev_best { (stable + 1).min(6) } else { 0 };
+            prev_best = best_move;
+            let mut soft = self.soft_ms;
+            if self.clock_tm && depth >= 6 && self.nodes > 0 {
+                let frac = self.root_nodes[best_move.from()][best_move.to()] as f64 / self.nodes as f64;
+                let stab = [1.5, 1.25, 1.1, 1.0, 0.95, 0.9, 0.85][stable];
+                soft = ((soft as f64 * (1.5 - frac) * 1.35 * stab) as u64).min(self.hard_ms);
+            }
+            if self.elapsed_ms() >= soft || limits.soft_nodes.is_some_and(|n| self.nodes >= n) {
                 break;
             }
         }
@@ -425,20 +489,26 @@ impl Searcher {
             }
         }
 
+        // raw_eval: the network's evaluation (what the TT stores); static_eval: raw_eval adjusted
+        // by the correction history (what pruning decisions use).
         let raw_eval;
+        let static_eval;
         let mut eval;
         if in_check {
             raw_eval = NO_EVAL;
+            static_eval = NO_EVAL;
             eval = NO_EVAL;
         } else if !excluded.is_null() {
-            raw_eval = self.stack[ply].static_eval;
-            eval = raw_eval;
+            static_eval = self.stack[ply].static_eval;
+            raw_eval = static_eval;
+            eval = static_eval;
         } else {
             raw_eval = match tt_entry {
                 Some(e) if e.eval > -MATE_BOUND => e.eval,
                 _ => self.eval(b, ply),
             };
-            eval = raw_eval;
+            static_eval = self.corrected(b, raw_eval);
+            eval = static_eval;
             // A TT score is a better estimate than the static eval when its bound allows it.
             if let Some(e) = tt_entry {
                 let s = score_from_tt(e.score, ply);
@@ -451,11 +521,11 @@ impl Searcher {
                 }
             }
         }
-        self.stack[ply].static_eval = raw_eval;
+        self.stack[ply].static_eval = static_eval;
         let improving = !in_check
             && ply >= 2
             && self.stack[ply - 2].static_eval != NO_EVAL
-            && raw_eval > self.stack[ply - 2].static_eval;
+            && static_eval > self.stack[ply - 2].static_eval;
         self.killers[ply + 1] = [Move::NULL; 2];
 
         if !pv_node && !in_check && excluded.is_null() {
@@ -473,7 +543,7 @@ impl Searcher {
             // Null move pruning: give the opponent a free move; if we still beat beta, cut.
             if depth >= 3
                 && eval >= beta
-                && raw_eval >= beta
+                && static_eval >= beta
                 && ply >= 1
                 && self.stack[ply - 1].cont != NO_CONT
                 && b.has_non_pawn_material(b.stm)
@@ -491,6 +561,42 @@ impl Searcher {
                 }
                 if s >= beta {
                     return if s >= MATE_BOUND { beta } else { s };
+                }
+            }
+            // ProbCut: a good capture that beats beta by a margin in a reduced search almost
+            // certainly beats beta in a full one.
+            let pc_beta = beta + 200;
+            if depth >= 5
+                && beta.abs() < MATE_BOUND
+                && !tt_entry.is_some_and(|e| e.depth >= depth - 3 && score_from_tt(e.score, ply) < pc_beta)
+            {
+                let mut list = MoveList::new();
+                b.gen_moves(&mut list, true);
+                let mut scores = [0i32; 256];
+                self.score_moves(b, &list, &mut scores, tt_move, ply);
+                for i in 0..list.len {
+                    let mv = Self::pick(&mut list, &mut scores, i);
+                    if !b.is_legal(mv) || !b.see(mv, pc_beta - static_eval) {
+                        continue;
+                    }
+                    let mut nb = *b;
+                    nb.make_move(mv);
+                    self.tt.prefetch(nb.hash);
+                    self.nnue_update(b, mv, ply);
+                    self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
+                    self.hashes.push(nb.hash);
+                    let mut s = -self.qsearch(&nb, -pc_beta, -pc_beta + 1, ply + 1);
+                    if s >= pc_beta {
+                        s = -self.negamax(&nb, depth - 4, -pc_beta, -pc_beta + 1, ply + 1, !cut_node);
+                    }
+                    self.hashes.pop();
+                    if self.stopped {
+                        return 0;
+                    }
+                    if s >= pc_beta && s.abs() < MATE_BOUND {
+                        self.tt.store(b.hash, mv, score_to_tt(s, ply), raw_eval, depth - 3, BOUND_LOWER);
+                        return s;
+                    }
                 }
             }
         }
@@ -535,6 +641,10 @@ impl Searcher {
                         skip_quiets = true;
                         continue;
                     }
+                    // History pruning: quiet moves that have kept failing elsewhere.
+                    if !in_check && depth <= 4 && scores[i] < -2048 * depth {
+                        continue;
+                    }
                     if depth <= 8 && !b.see(mv, -50 * depth) {
                         continue;
                     }
@@ -577,6 +687,7 @@ impl Searcher {
             self.hashes.push(nb.hash);
             legal += 1;
             let new_depth = depth - 1 + ext;
+            let nodes_before = self.nodes;
 
             let score = if legal == 1 {
                 -self.negamax(&nb, new_depth, -beta, -alpha, ply + 1, false)
@@ -609,6 +720,9 @@ impl Searcher {
             self.hashes.pop();
             if self.stopped {
                 return 0;
+            }
+            if root {
+                self.root_nodes[mv.from()][mv.to()] += self.nodes - nodes_before;
             }
 
             if score > best {
@@ -672,6 +786,16 @@ impl Searcher {
             } else {
                 BOUND_UPPER
             };
+            // Learn how far off the static eval was, from quiet positions where the result is
+            // trustworthy in that direction (a fail-high only says "at least", a fail-low "at most").
+            if !in_check
+                && (best_move.is_null() || !best_move.is_capture())
+                && best.abs() < MATE_BOUND
+                && !(bound == BOUND_LOWER && best <= static_eval)
+                && !(bound == BOUND_UPPER && best >= static_eval)
+            {
+                self.update_corr(b, raw_eval, best, depth);
+            }
             self.tt.store(b.hash, best_move, score_to_tt(best, ply), raw_eval, depth, bound);
         }
         best
@@ -715,7 +839,7 @@ impl Searcher {
                 Some(e) if e.eval > -MATE_BOUND => e.eval,
                 _ => self.eval(b, ply),
             };
-            best = raw_eval;
+            best = self.corrected(b, raw_eval);
             if best >= beta {
                 return best;
             }
@@ -729,7 +853,7 @@ impl Searcher {
 
         let mut best_move = Move::NULL;
         let mut legal = 0;
-        let futility = raw_eval + 150;
+        let futility = if in_check { NO_EVAL } else { best + 150 };
         for i in 0..list.len {
             let mv = Self::pick(&mut list, &mut scores, i);
             if !b.is_legal(mv) {

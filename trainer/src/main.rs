@@ -39,7 +39,18 @@ const KING_BUCKETS: [usize; 32] = [
     9, 9, 9, 9,
     9, 9, 9, 9,
 ];
-const NUM_KING_BUCKETS: usize = get_num_buckets(&KING_BUCKETS);
+/// "kb4": a/b and c/d files on the back rank, the 2nd rank, everything further up.
+#[rustfmt::skip]
+const KING_BUCKETS_4: [usize; 32] = [
+    0, 0, 1, 1,
+    2, 2, 2, 2,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+];
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -72,18 +83,20 @@ fn main() {
     println!("Architecture           : ({inputs} -> {hidden})x2 -> {buckets}");
 
     // target = wdl * game_result + (1 - wdl) * sigmoid(score / SCALE)
-    if inputs == "kb10" {
+    if inputs == "kb10" || inputs == "kb4" {
         assert_eq!(buckets, 1, "king buckets are only set up with a single output bucket");
+        let layout = if inputs == "kb4" { KING_BUCKETS_4 } else { KING_BUCKETS };
+        let num_kb = get_num_buckets(&layout);
         // A shared "factoriser" (one 768-input copy added to every bucket) lets what is learned
         // in one king bucket help the others; it is merged into the bucket weights when saving.
         let mut trainer = ValueTrainerBuilder::default()
             .dual_perspective()
             .optimiser(AdamW)
-            .inputs(ChessBucketsMirrored::new(KING_BUCKETS))
+            .inputs(ChessBucketsMirrored::new(layout))
             .save_format(&[
                 SavedFormat::id("l0w")
-                    .transform(|store, weights| {
-                        let factoriser = store.get("l0f").values.f32().repeat(NUM_KING_BUCKETS);
+                    .transform(move |store, weights| {
+                        let factoriser = store.get("l0f").values.f32().repeat(num_kb);
                         weights.into_iter().zip(factoriser).map(|(a, b)| a + b).collect()
                     })
                     .round()
@@ -95,8 +108,8 @@ fn main() {
             .loss_fn(|output, target| output.sigmoid().squared_error(target))
             .build(|builder, stm_inputs, ntm_inputs| {
                 let l0f = builder.new_weights("l0f", Shape::new(hidden, 768), InitSettings::Zeroed);
-                let mut l0 = builder.new_affine("l0", 768 * NUM_KING_BUCKETS, hidden);
-                l0.weights = l0.weights + l0f.repeat(NUM_KING_BUCKETS);
+                let mut l0 = builder.new_affine("l0", 768 * num_kb, hidden);
+                l0.weights = l0.weights + l0f.repeat(num_kb);
                 let l1 = builder.new_affine("l1", 2 * hidden, 1);
                 let stm_hidden = l0.forward(stm_inputs).screlu();
                 let ntm_hidden = l0.forward(ntm_inputs).screlu();

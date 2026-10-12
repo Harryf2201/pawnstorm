@@ -520,6 +520,8 @@ struct Version {
     network: String,
     data: String,
     summary: String,
+    /// Main version this experiment was promoted to (its games are rated under that version).
+    became: String,
 }
 
 /// `[section]` + `key = value` lines; `;` and `#` start comments. Sections keep file order.
@@ -546,6 +548,7 @@ fn parse_versions(text: &str) -> Vec<Version> {
             "network" => v.network = val,
             "data" => v.data = val,
             "summary" => v.summary = val,
+            "became" => v.became = val,
             _ => {}
         }
     }
@@ -669,8 +672,24 @@ fn global_ratings(runs: &HashMap<String, RunState>, alias: &HashMap<String, Stri
         vs[i].push((names[j].clone(), c[0], c[1], c[2], anchor[j]));
         vs[j].push((names[i].clone(), c[2], c[1], c[0], anchor[i]));
     }
+    // Engines with no chain of games back to an anchor (e.g. two test networks that only played
+    // each other) have no meaningful rating, so they are left out.
+    let mut anchored: Vec<bool> = anchor.iter().map(|a| a.is_some()).collect();
+    loop {
+        let mut grew = false;
+        for &(i, j) in pairs.keys() {
+            if anchored[i] != anchored[j] {
+                anchored[i] = true;
+                anchored[j] = true;
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
     (0..n)
-        .filter(|&i| anchor[i].is_none() && games[i] > 0.0)
+        .filter(|&i| anchor[i].is_none() && games[i] > 0.0 && anchored[i])
         .map(|i| Rated {
             name: names[i].clone(),
             rating: rating[i],
@@ -1056,7 +1075,7 @@ impl App {
             .iter()
             .map(|v| {
                 format!(
-                    "{{\"name\":{},\"title\":{},\"engines\":[{}],\"status\":{},\"date\":{},\"parent\":{},\"branch\":{},\"network\":{},\"data\":{},\"summary\":{}}}",
+                    "{{\"name\":{},\"title\":{},\"engines\":[{}],\"status\":{},\"date\":{},\"parent\":{},\"branch\":{},\"network\":{},\"data\":{},\"summary\":{},\"became\":{}}}",
                     js(&v.name),
                     js(&v.title),
                     v.engines.iter().map(|e| js(e)).collect::<Vec<_>>().join(","),
@@ -1066,7 +1085,8 @@ impl App {
                     js(&v.branch),
                     js(&v.network),
                     js(&v.data),
-                    js(&v.summary)
+                    js(&v.summary),
+                    js(&v.became)
                 )
             })
             .collect();
