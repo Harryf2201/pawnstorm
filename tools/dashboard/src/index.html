@@ -206,6 +206,9 @@
   .bw { display: flex; gap: 6px; }
   .evalbar { width: 10px; border-radius: 3px; overflow: hidden; background: #333; display: flex; flex-direction: column; border: 1px solid var(--border); }
   .evalbar .b { background: #2b2b2b; transition: height .4s; } .evalbar .w { background: #f0f0f0; flex: 1; }
+  .evalbar.sf { border-color: var(--accent); }
+  .sfline { font-size: 12px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .sfline b { color: var(--text); }
   .board { flex: 1; display: grid; grid-template-columns: repeat(8, 1fr); aspect-ratio: 1; border-radius: 4px; overflow: hidden; container-type: inline-size; }
   .sq { display: flex; align-items: center; justify-content: center; position: relative; }
   .sq.l { background: var(--sq-light); } .sq.d { background: var(--sq-dark); }
@@ -1349,18 +1352,66 @@ function renderSchedule() {
 
 // ---- Lichess bot (/api/lichess): tools\lichess-sync.ps1 reads the bot account every 2 minutes ----
 let lichess = null, lichessLive = null;
+/// Stockfish 19 running in this browser (WebAssembly in a worker, files served from /sf/): an
+/// independent "true" eval of the live Lichess game. Off until switched on; "lite" (1.9 MB) or
+/// "full" (99 MB, cached by the browser after the first load).
+const sf = { worker: null, flavor: null, ready: false, fen: null, depth: 0, cp: null, mate: null, pv: [], whiteToMove: true };
+function sfStart(flavor) {
+  if (sf.worker && sf.flavor === flavor) return;
+  if (sf.worker) sf.worker.terminate();
+  Object.assign(sf, { worker: null, flavor, ready: false, fen: null, depth: 0, cp: null, mate: null, pv: [] });
+  if (flavor === 'off') return;
+  const w = new Worker(flavor === 'full' ? '/sf/stockfish-19-single.js' : '/sf/stockfish-19-lite-single.js');
+  w.onmessage = e => {
+    const line = String(e.data);
+    if (line === 'readyok') { sf.ready = true; sfAnalyse(lichessLive && lichessLive.fen); }
+    if (!line.startsWith('info ') || !line.includes(' score ') || line.includes(' upperbound') || line.includes(' lowerbound')) return;
+    const t = line.split(' '), at = k => t[t.indexOf(k) + 1];
+    if (t.includes('multipv') && at('multipv') !== '1') return;
+    sf.depth = +at('depth');
+    const kind = at('score'), v = +t[t.indexOf('score') + 2], sign = sf.whiteToMove ? 1 : -1;
+    sf.mate = kind === 'mate' ? v * sign : null;
+    sf.cp = kind === 'cp' ? v * sign : null;
+    sf.pv = t.includes('pv') ? t.slice(t.indexOf('pv') + 1, t.indexOf('pv') + 7) : [];
+  };
+  w.postMessage('uci');
+  w.postMessage('setoption name Hash value 64');
+  w.postMessage('isready');
+  sf.worker = w;
+}
+/// Analyse a new position (stops the previous search); called whenever the live board changes.
+function sfAnalyse(fen) {
+  if (!sf.worker || !sf.ready || !fen || fen === sf.fen) return;
+  sf.fen = fen; sf.depth = 0; sf.cp = null; sf.mate = null; sf.pv = [];
+  sf.whiteToMove = fen.split(' ')[1] === 'w';
+  sf.worker.postMessage('stop');
+  sf.worker.postMessage('position fen ' + fen);
+  sf.worker.postMessage('go depth 40');
+}
+const sfEvalText = () => sf.mate != null ? (sf.mate > 0 ? '+M' : '-M') + Math.abs(sf.mate) : sf.cp != null ? (sf.cp >= 0 ? '+' : '') + (sf.cp / 100).toFixed(2) : '…';
+const sfWhiteCp = () => sf.mate != null ? (sf.mate > 0 ? 3000 : -3000) : sf.cp || 0;
+
 /// The bot's game in progress (/api/lichess/live, rebuilt from its log): board and engine eval.
 function lichessLiveHtml(g) {
-  const whitePct = 50 + 50 * (2 / (1 + Math.exp(-g.cp / 250)) - 1);
+  const pct = cp => 50 + 50 * (2 / (1 + Math.exp(-cp / 250)) - 1);
+  const flavor = ui.sfFlavor || 'off';
+  if (flavor !== 'off') { sfStart(flavor); sfAnalyse(g.fen); } else if (sf.worker) sfStart('off');
+  const sfOn = flavor !== 'off' && sf.worker;
   const player = (name) => `<div class="player ${g.thinking === name ? 'to' : ''}"><span class="n">${g.thinking === name ? '<span class="dot running"></span>' : ''}${esc(name)}</span></div>`;
+  const bar = (cp, cls, title) => `<div class="evalbar ${cls}" title="${title}"><div class="b" style="height:${100 - pct(cp)}%"></div><div class="w"></div></div>`;
+  const btn = (k, label) => `<button class="btn sm ${flavor === k ? 'on' : ''}" data-set="sfFlavor:${k}">${label}</button>`;
+  const sfText = !sfOn ? '' : !sf.ready ? `<div class="sfline">Stockfish 19 (${flavor}) is loading${flavor === 'full' ? ' (99 MB the first time, then cached)' : ''}…</div>`
+    : `<div class="sfline">Stockfish 19 (${flavor}): <b>${sfEvalText()}</b> · depth ${sf.depth || '–'}${sf.pv.length ? ' · best line <b>' + esc(sf.pv.join(' ')) + '</b>' : ''}</div>`;
   return `<h4>Playing now · <a href="${esc(g.url)}" target="_blank" rel="noopener">watch on Lichess</a></h4>
+    <div class="toolbar" style="flex-wrap:wrap;gap:6px"><span class="sub">Stockfish 19 in this browser:</span>${btn('off', 'Off')}${btn('lite', 'Lite (1.9 MB)')}${btn('full', 'Full (99 MB)')}</div>
     <div class="games"><div class="game">
     ${player(g.black)}
-    <div class="bw"><div class="evalbar"><div class="b" style="height:${100 - whitePct}%"></div><div class="w"></div></div>${boardHtml(g.fen, g.last)}</div>
+    <div class="bw">${bar(g.cp, '', "Pawnstorm's eval")}${boardHtml(g.fen, g.last)}${sfOn && sf.ready ? bar(sfWhiteCp(), 'sf', 'Stockfish 19 eval') : ''}</div>
     ${player(g.white)}
-    <div class="ginfo"><span>Move <b>${g.move}</b></span><span>Eval <b>${esc(g.eval)}</b></span><span>Depth <b>${g.depth || '–'}</b></span></div>
+    <div class="ginfo"><span>Move <b>${g.move}</b></span><span>Pawnstorm <b>${esc(g.eval)}</b></span><span>Depth <b>${g.depth || '–'}</b></span></div>
+    ${sfText}
     </div></div>
-    <div class="sub" style="font-size:12px">Eval from White's side, from Pawnstorm's own search on its last move (8 threads). Updates every couple of seconds.</div>`;
+    <div class="sub" style="font-size:12px">Left bar: Pawnstorm's own eval from its last move (8 threads). Right bar: Stockfish 19 analysing the current position in this browser, on this device's CPU. Both from White's side.</div>`;
 }
 function renderLichess() {
   if (!lichess) return '';

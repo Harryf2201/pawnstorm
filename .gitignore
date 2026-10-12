@@ -12,3 +12,7 @@ config.json
 *.bin
 !nets/default.bin
 *.txt.gz
+
+# Stockfish 19 WebAssembly builds for in-browser analysis (downloaded, ~100 MB)
+tools/dashboard/sf/
+

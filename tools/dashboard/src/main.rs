@@ -1947,6 +1947,20 @@ fn serve(app: &App, mut stream: TcpStream) {
     let method = first.next().unwrap_or("GET").to_string();
     let path = first.next().unwrap_or("/").to_string();
     let trusted = req.lines().any(|l| l.to_ascii_lowercase().starts_with("x-lab:"));
+    // Stockfish 19 WebAssembly for in-browser analysis (tools/dashboard/sf, downloaded separately):
+    // binary files, cached by the browser so the ~100 MB network loads once per device.
+    if let Some(name) = path.strip_prefix("/sf/") {
+        let ok_name = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.') && !name.contains("..");
+        let file = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/sf")).join(name);
+        let ctype = if name.ends_with(".wasm") { "application/wasm" } else { "text/javascript" };
+        let reply = match std::fs::read(&file) {
+            Ok(bytes) if ok_name => (format!("HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: max-age=604800\r\nConnection: close\r\n\r\n", bytes.len()), bytes),
+            _ => ("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(), Vec::new()),
+        };
+        let _ = stream.write_all(reply.0.as_bytes());
+        let _ = stream.write_all(&reply.1);
+        return;
+    }
     let (status, body, ctype) = app.handle(&method, &path, trusted);
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
