@@ -1391,27 +1391,36 @@ function sfAnalyse(fen) {
 const sfEvalText = () => sf.mate != null ? (sf.mate > 0 ? '+M' : '-M') + Math.abs(sf.mate) : sf.cp != null ? (sf.cp >= 0 ? '+' : '') + (sf.cp / 100).toFixed(2) : '…';
 const sfWhiteCp = () => sf.mate != null ? (sf.mate > 0 ? 3000 : -3000) : sf.cp || 0;
 
-/// The bot's game in progress (/api/lichess/live, rebuilt from its log): board and engine eval.
-function lichessLiveHtml(g) {
+/// The bot's games in progress (/api/lichess/live, one per game, rebuilt from its log): a board
+/// and Pawnstorm's eval for each; Stockfish 19 (in this browser) analyses the one picked.
+function lichessLiveHtml(games) {
   const pct = cp => 50 + 50 * (2 / (1 + Math.exp(-cp / 250)) - 1);
+  const gid = g => g.url.split('/')[3];
   const flavor = ui.sfFlavor || 'off';
-  if (flavor !== 'off') { sfStart(flavor); sfAnalyse(g.fen); } else if (sf.worker) sfStart('off');
+  const target = games.find(g => gid(g) === ui.sfGame) || games[0];
+  if (flavor !== 'off') { sfStart(flavor); sfAnalyse(target.fen); } else if (sf.worker) sfStart('off');
   const sfOn = flavor !== 'off' && sf.worker;
-  const player = (name) => `<div class="player ${g.thinking === name ? 'to' : ''}"><span class="n">${g.thinking === name ? '<span class="dot running"></span>' : ''}${esc(name)}</span></div>`;
   const bar = (cp, cls, title) => `<div class="evalbar ${cls}" title="${title}"><div class="b" style="height:${100 - pct(cp)}%"></div><div class="w"></div></div>`;
   const btn = (k, label) => `<button class="btn sm ${flavor === k ? 'on' : ''}" data-set="sfFlavor:${k}">${label}</button>`;
-  const sfText = !sfOn ? '' : !sf.ready ? `<div class="sfline">Stockfish 19 (${flavor}) is loading${flavor === 'full' ? ' (99 MB the first time, then cached)' : ''}…</div>`
-    : `<div class="sfline">Stockfish 19 (${flavor}): <b>${sfEvalText()}</b> · depth ${sf.depth || '–'}${sf.pv.length ? ' · best line <b>' + esc(sf.pv.join(' ')) + '</b>' : ''}</div>`;
-  return `<h4>Playing now · <a href="${esc(g.url)}" target="_blank" rel="noopener">watch on Lichess</a></h4>
+  const card = g => {
+    const isTarget = g === target;
+    const player = (name) => `<div class="player ${g.thinking === name ? 'to' : ''}"><span class="n">${g.thinking === name ? '<span class="dot running"></span>' : ''}${esc(name)}</span></div>`;
+    const sfText = !sfOn ? '' : !isTarget ? `<div class="sfline"><button class="btn sm" data-set="sfGame:${esc(gid(g))}">Analyse this game with Stockfish</button></div>`
+      : !sf.ready ? `<div class="sfline">Stockfish 19 (${flavor}) is loading${flavor === 'full' ? ' (99 MB the first time, then cached)' : ''}…</div>`
+      : `<div class="sfline">Stockfish 19 (${flavor}): <b>${sfEvalText()}</b> · depth ${sf.depth || '–'}${sf.pv.length ? ' · best line <b>' + esc(sf.pv.join(' ')) + '</b>' : ''}</div>`;
+    return `<div class="game">
+      ${player(g.black)}
+      <div class="bw">${bar(g.cp, '', "Pawnstorm's eval")}${boardHtml(g.fen, g.last)}${sfOn && sf.ready && isTarget ? bar(sfWhiteCp(), 'sf', 'Stockfish 19 eval') : ''}</div>
+      ${player(g.white)}
+      <div class="ginfo"><span>Move <b>${g.move}</b></span><span>Pawnstorm <b>${esc(g.eval)}</b></span><span>Depth <b>${g.depth || '–'}</b></span></div>
+      <div class="sfline"><a href="${esc(g.url)}" target="_blank" rel="noopener">watch on Lichess</a></div>
+      ${sfText}
+    </div>`;
+  };
+  return `<h4>Playing now (${games.length})</h4>
     <div class="toolbar" style="flex-wrap:wrap;gap:6px"><span class="sub">Stockfish 19 in this browser:</span>${btn('off', 'Off')}${btn('lite', 'Lite (1.9 MB)')}${btn('full', 'Full (99 MB)')}</div>
-    <div class="games"><div class="game">
-    ${player(g.black)}
-    <div class="bw">${bar(g.cp, '', "Pawnstorm's eval")}${boardHtml(g.fen, g.last)}${sfOn && sf.ready ? bar(sfWhiteCp(), 'sf', 'Stockfish 19 eval') : ''}</div>
-    ${player(g.white)}
-    <div class="ginfo"><span>Move <b>${g.move}</b></span><span>Pawnstorm <b>${esc(g.eval)}</b></span><span>Depth <b>${g.depth || '–'}</b></span></div>
-    ${sfText}
-    </div></div>
-    <div class="sub" style="font-size:12px">Left bar: Pawnstorm's own eval from its last move (8 threads). Right bar: Stockfish 19 analysing the current position in this browser, on this device's CPU. Both from White's side.</div>`;
+    <div class="games">${games.map(card).join('')}</div>
+    <div class="sub" style="font-size:12px">Left bar: Pawnstorm's own eval from its last move. Right bar: Stockfish 19 analysing the current position in this browser, on this device's CPU (one game at a time). Both from White's side.</div>`;
 }
 function renderLichess() {
   if (!lichess) return '';
@@ -1435,7 +1444,7 @@ function renderLichess() {
     <div class="cards">${ratings}
       <div class="card"><div class="k">Last ${total} games</div><div class="v">${w}–${d}–${lo}</div><div class="d">win–draw–loss · score ${score(done)}${rated.length ? ` · rated ${rw}–${rd}–${rl}` : ''}</div></div>
     </div>
-    ${lichessLive ? lichessLiveHtml(lichessLive) : ''}
+    ${lichessLive && lichessLive.length ? lichessLiveHtml(lichessLive) : ''}
     ${rows ? `<h4>Recent games</h4><div class="cl-wrap"><table class="cl"><tbody>${rows}</tbody></table></div>` : ''}
     <div class="sub" style="font-size:12px;margin-top:8px">${l.playing ? l.playing + ' game in progress · ' : ''}${live ? 'updated ' + hm(l.updated) : 'status is stale (the sync script is not running)'} · <a href="https://lichess.org/@/${esc(l.username)}" target="_blank" rel="noopener">profile</a></div>`;
   const sum = (l.perfs.length ? l.perfs.map(p => p.rating).join(' / ') + ' · ' : '') + `${w}–${d}–${lo}` + (l.playing ? ' · playing now' : '');

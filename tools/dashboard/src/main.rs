@@ -791,66 +791,103 @@ fn replay(cmd: &str) -> Option<(Board, Option<Move>, usize)> {
     Some((b, last, n))
 }
 
-/// The Lichess bot's game in progress, rebuilt from the end of lichess-bot\bot.log (the bot logs
-/// every UCI line it exchanges with the engine): the latest "+++ <game url>" starts a game, the last
-/// "position" command plus the engine's reply give the board, and its last scored "info" line the eval.
-fn lichess_live(log: &Path) -> String {
-    use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut f) = std::fs::File::open(log) else { return "null".into() };
-    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
-    // The engine's analysis lines make the log grow fast, so read further back until the line
-    // that started the current game is included.
-    let mut text = String::new();
-    for size in [256u64 << 10, 4 << 20, 32 << 20] {
-        let _ = f.seek(SeekFrom::Start(len.saturating_sub(size)));
-        let mut buf = Vec::new();
-        let _ = f.read_to_end(&mut buf);
-        text = String::from_utf8_lossy(&buf).into_owned();
-        if text.contains("+++ https://lichess.org/") || size >= len {
-            break;
+/// One of the Lichess bot's games in progress.
+#[derive(Default)]
+struct BotGame {
+    url: String,
+    opp: String,
+    we_white: bool,
+    /// The engine process playing it: lichess-bot starts one per game, and every UCI line it
+    /// logs carries that process id.
+    pid: String,
+    pos: String,
+    best: String,
+    score: Option<(bool, i32)>,
+    depth: u32,
+    updated: u64,
+}
+
+/// The Lichess bot's games in progress, followed incrementally from lichess-bot\bot.log (the bot
+/// logs every UCI line it exchanges with each game's engine). A new engine process ("Connection
+/// made") starts right before each "+++ <game url>" line, which pairs games with engines.
+#[derive(Default)]
+struct BotLog {
+    tail: Tail,
+    games: Vec<BotGame>,
+    pending_pid: String,
+}
+
+fn pid_of(line: &str) -> Option<&str> {
+    let i = line.find("(pid=")? + 5;
+    let j = line[i..].find(')')? + i;
+    Some(&line[i..j])
+}
+
+impl BotLog {
+    fn update(&mut self, log: &Path) {
+        // A restarted bot starts a new, smaller log: forget the old games.
+        if std::fs::metadata(log).map(|m| m.len()).unwrap_or(0) < self.tail.offset {
+            self.games.clear();
         }
-    }
-    let (mut url, mut opp, mut we_white, mut over) = (String::new(), String::new(), true, false);
-    let (mut pos, mut best, mut score, mut depth, mut nps) = (String::new(), String::new(), None::<(bool, i32)>, 0u32, 0u64);
-    for line in text.lines() {
-        if let Some(i) = line.find("+++ https://lichess.org/") {
-            let rest = &line[i + 4..];
-            url = rest.split_whitespace().next().unwrap_or("").to_string();
-            we_white = url.ends_with("/white");
-            // "... Rapid vs BOT classical-leela (2956) (D2Ad87Dc)" -> "BOT classical-leela (2956)"
-            opp = rest.split(" vs ").nth(1).map(|s| s.rsplit_once(" (").map_or(s, |x| x.0).trim().to_string()).unwrap_or_default();
-            over = false;
-            pos.clear();
-            best.clear();
-            score = None;
-        } else if line.contains("--- https://lichess.org/") || line.contains("Game over") {
-            over = true;
-        } else if let Some(i) = line.find("<< position ") {
-            pos = line[i + 3..].trim().to_string();
-            best.clear();
-        } else if let Some(i) = line.find(">> bestmove ") {
-            best = line[i + 12..].split_whitespace().next().unwrap_or("").to_string();
-        } else if let Some(i) = line.find(">> info ") {
-            let tk: Vec<&str> = line[i + 8..].split_whitespace().collect();
-            if let Some(j) = tk.iter().position(|&t| t == "score") {
-                if let (Some(&kind), Some(v)) = (tk.get(j + 1), tk.get(j + 2).and_then(|s| s.parse().ok())) {
-                    score = Some((kind == "mate", v));
-                    depth = after(&tk, "depth").and_then(|s| s.parse().ok()).unwrap_or(depth);
-                    nps = after(&tk, "nps").and_then(|s| s.parse().ok()).unwrap_or(nps);
+        let t = now();
+        for line in self.tail.read_new(log) {
+            if let Some(i) = line.find("+++ https://lichess.org/") {
+                let rest = &line[i + 4..];
+                let url = rest.split_whitespace().next().unwrap_or("").to_string();
+                // "... Bullet vs BOT pangubot (3080) (fMCXAsNa)" -> "BOT pangubot (3080)"
+                let opp = rest.split(" vs ").nth(1).map(|s| s.rsplit_once(" (").map_or(s, |x| x.0).trim().to_string()).unwrap_or_default();
+                self.games.retain(|g| g.url != url);
+                let pid = std::mem::take(&mut self.pending_pid);
+                self.games.push(BotGame { we_white: url.ends_with("/white"), url, opp, pid, updated: t, ..Default::default() });
+            } else if let Some(i) = line.find("--- https://lichess.org/") {
+                let id: String = line[i + 24..].chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+                self.games.retain(|g| !g.url.contains(&format!("/{id}/")));
+            } else if let Some(pid) = pid_of(&line) {
+                if line.ends_with("Connection made") {
+                    self.pending_pid = pid.to_string();
+                    continue;
+                }
+                let Some(g) = self.games.iter_mut().find(|g| g.pid == pid) else { continue };
+                g.updated = t;
+                if let Some(i) = line.find("<< position ") {
+                    g.pos = line[i + 3..].trim().to_string();
+                    g.best.clear();
+                } else if let Some(i) = line.find(">> bestmove ") {
+                    g.best = line[i + 12..].split_whitespace().next().unwrap_or("").to_string();
+                } else if let Some(i) = line.find(">> info ") {
+                    let tk: Vec<&str> = line[i + 8..].split_whitespace().collect();
+                    if let Some(j) = tk.iter().position(|&x| x == "score") {
+                        if let (Some(&kind), Some(v)) = (tk.get(j + 1), tk.get(j + 2).and_then(|s| s.parse().ok())) {
+                            g.score = Some((kind == "mate", v));
+                            g.depth = after(&tk, "depth").and_then(|s| s.parse().ok()).unwrap_or(g.depth);
+                        }
+                    }
                 }
             }
         }
+        // Games whose end was missed (e.g. the bot was killed) drop out after 15 quiet minutes.
+        self.games.retain(|g| t.saturating_sub(g.updated) < 900);
     }
-    let fresh = now().saturating_sub(mtime(log)) < 600;
-    if url.is_empty() || over || pos.is_empty() || !fresh {
-        return "null".into();
+
+    fn json(&self) -> String {
+        let items: Vec<String> = self.games.iter().filter(|g| !g.pos.is_empty()).filter_map(bot_game_json).collect();
+        format!("[{}]", items.join(","))
     }
+}
+
+fn bot_game_json(g: &BotGame) -> Option<String> {
     // After the engine's reply, show the position with that move played.
-    let cmd = if best.is_empty() { pos.clone() } else if pos.contains(" moves ") { format!("{pos} {best}") } else { format!("{pos} moves {best}") };
-    let Some((b, last, _)) = replay(&cmd) else { return "null".into() };
-    // The engine's score is for the side it was thinking for (us); the board's eval bar is White's view.
-    let sign = if we_white { 1 } else { -1 };
-    let (eval_text, cp) = match score {
+    let cmd = if g.best.is_empty() {
+        g.pos.clone()
+    } else if g.pos.contains(" moves ") {
+        format!("{} {}", g.pos, g.best)
+    } else {
+        format!("{} moves {}", g.pos, g.best)
+    };
+    let (b, last, _) = replay(&cmd)?;
+    // The engine's score is for the side it was thinking for (us); the eval bar is White's view.
+    let sign = if g.we_white { 1 } else { -1 };
+    let (eval_text, cp) = match g.score {
         Some((true, v)) => {
             let v = v * sign;
             (format!("{}M{}", if v > 0 { "+" } else { "-" }, v.abs()), if v > 0 { 3000 } else { -3000 })
@@ -859,12 +896,12 @@ fn lichess_live(log: &Path) -> String {
         None => ("…".into(), 0),
     };
     let me = "Pawnstorm".to_string();
-    let (white, black) = if we_white { (me.clone(), opp.clone()) } else { (opp.clone(), me.clone()) };
-    let thinking = if best.is_empty() { me } else { opp };
+    let (white, black) = if g.we_white { (me.clone(), g.opp.clone()) } else { (g.opp.clone(), me.clone()) };
+    let thinking = if g.best.is_empty() { me } else { g.opp.clone() };
     let last_json = last.map_or("null".into(), |m| format!("[{},{}]", js(&sq_name(m.from())), js(&sq_name(m.to()))));
-    format!(
-        "{{\"url\":{},\"white\":{},\"black\":{},\"fen\":{},\"last\":{},\"thinking\":{},\"eval\":{},\"cp\":{},\"depth\":{},\"nps\":{},\"move\":{}}}",
-        js(&url),
+    Some(format!(
+        "{{\"url\":{},\"white\":{},\"black\":{},\"fen\":{},\"last\":{},\"thinking\":{},\"eval\":{},\"cp\":{},\"depth\":{},\"move\":{}}}",
+        js(&g.url),
         js(&white),
         js(&black),
         js(&b.to_fen()),
@@ -872,12 +909,10 @@ fn lichess_live(log: &Path) -> String {
         js(&thinking),
         js(&eval_text),
         cp,
-        depth,
-        nps,
+        g.depth,
         b.fullmove
-    )
+    ))
 }
-
 /// For round robins: every pairing's W/D/L ("cross") and ratings fitted from this run's games alone,
 /// with its Stockfish anchors fixed ("fit"). Same maximum-likelihood fit as the overall ratings,
 /// including one virtual draw per pairing so 100% scores stay finite.
@@ -1144,6 +1179,8 @@ struct App {
     lab_child: Mutex<Option<(String, std::process::Child)>>,
     /// Where versions.ini may live (repo root next to the exe, or the working directory); first existing wins.
     version_files: Vec<PathBuf>,
+    /// The Lichess bot's games in progress (/api/lichess/live).
+    bot: Mutex<BotLog>,
 }
 
 impl App {
@@ -1874,7 +1911,10 @@ impl App {
         // Lichess bot (tools\lichess-sync.ps1): the bot account's ratings and recent games.
         if path == "/api/lichess/live" {
             let log = self.root.parent().map(|p| p.join("lichess-bot").join("bot.log"));
-            return ("200 OK", log.map_or("null".into(), |l| lichess_live(&l)), "application/json");
+            let Some(log) = log else { return ("200 OK", "[]".into(), "application/json") };
+            let mut bot = self.bot.lock().unwrap();
+            bot.update(&log);
+            return ("200 OK", bot.json(), "application/json");
         }
         if path == "/api/lichess" {
             let file = self.root.join("lichess").join("status.json");
@@ -1987,7 +2027,7 @@ fn main() {
         .into_iter()
         .collect();
     version_files.push(PathBuf::from("versions.ini"));
-    let app = Arc::new(App { root, runs: Mutex::new(HashMap::new()), lab_child: Mutex::new(None), version_files });
+    let app = Arc::new(App { root, runs: Mutex::new(HashMap::new()), lab_child: Mutex::new(None), version_files, bot: Mutex::new(BotLog::default()) });
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("cannot bind port");
     println!("Pawnstorm Lab running at http://localhost:{port}");
     for stream in listener.incoming().flatten() {
