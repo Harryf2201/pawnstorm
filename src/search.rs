@@ -81,6 +81,9 @@ pub struct Searcher {
     stopped: bool,
     pub print: bool,
     pub overhead_ms: u64,
+    /// False for the extra Lazy-SMP threads: they search the same position to fill the shared
+    /// hash table, while the main thread alone ages the table, manages time and picks the move.
+    pub main_thread: bool,
 }
 
 const CORR_SIZE: usize = 16384;
@@ -178,6 +181,7 @@ impl Searcher {
             node_limit: u64::MAX,
             stopped: false,
             print: true,
+            main_thread: true,
             overhead_ms: 10,
         }
     }
@@ -369,7 +373,9 @@ impl Searcher {
         self.stopped = false;
         self.seldepth = 0;
         self.setup_time(limits, board.stm);
-        self.tt.new_search();
+        if self.main_thread {
+            self.tt.new_search();
+        }
         self.killers = [[Move::NULL; 2]; MAX_PLY + 2];
         self.stack = [PlyInfo::default(); MAX_PLY + 4];
         *self.root_nodes = [[0; 64]; 64];

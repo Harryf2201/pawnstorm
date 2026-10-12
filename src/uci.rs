@@ -19,9 +19,20 @@ struct Engine {
     tt: Arc<TT>,
     stop: Arc<AtomicBool>,
     searcher: Option<Box<Searcher>>,
-    handle: Option<JoinHandle<Box<Searcher>>>,
+    /// Extra Lazy-SMP threads (Threads - 1 of them), each with its own histories.
+    helpers: Vec<Box<Searcher>>,
+    handle: Option<JoinHandle<(Box<Searcher>, Vec<Box<Searcher>>)>>,
     hash_mb: usize,
     overhead_ms: u64,
+}
+
+const MAX_THREADS: usize = 64;
+
+fn helper(tt: &Arc<TT>, stop: &Arc<AtomicBool>) -> Box<Searcher> {
+    let mut s = Box::new(Searcher::new(tt.clone(), stop.clone()));
+    s.print = false;
+    s.main_thread = false;
+    s
 }
 
 impl Engine {
@@ -36,6 +47,7 @@ impl Engine {
             tt,
             stop,
             searcher: Some(searcher),
+            helpers: Vec::new(),
             handle: None,
             hash_mb: 16,
             overhead_ms: 10,
@@ -44,7 +56,9 @@ impl Engine {
 
     fn wait(&mut self) {
         if let Some(h) = self.handle.take() {
-            self.searcher = Some(h.join().expect("search thread panicked"));
+            let (main, helpers) = h.join().expect("search thread panicked");
+            self.searcher = Some(main);
+            self.helpers = helpers;
         }
     }
 
@@ -53,6 +67,17 @@ impl Engine {
         self.hash_mb = mb.clamp(1, 65536);
         self.tt = Arc::new(TT::new(self.hash_mb));
         self.searcher = Some(Box::new(Searcher::new(self.tt.clone(), self.stop.clone())));
+        let n = self.helpers.len();
+        self.helpers = (0..n).map(|_| helper(&self.tt, &self.stop)).collect();
+    }
+
+    fn set_threads(&mut self, n: usize) {
+        self.wait();
+        let n = n.clamp(1, MAX_THREADS);
+        self.helpers.truncate(n - 1);
+        while self.helpers.len() < n - 1 {
+            self.helpers.push(helper(&self.tt, &self.stop));
+        }
     }
 
     fn position(&mut self, tokens: &[&str]) {
@@ -119,12 +144,35 @@ impl Engine {
         searcher.print = true;
         searcher.overhead_ms = self.overhead_ms;
         let board = self.board;
+        let mut helpers = std::mem::take(&mut self.helpers);
+        for h in helpers.iter_mut() {
+            h.hashes.clone_from(&self.hashes);
+        }
+        let stop = self.stop.clone();
         let handle = std::thread::Builder::new()
             .stack_size(SEARCH_STACK)
             .spawn(move || {
+                // Helpers search until the main thread is done (or the depth limit); only the
+                // main thread watches the clock and the node limit.
+                let helper_limits = Limits { depth: limits.depth, ..Limits::default() };
+                let running: Vec<JoinHandle<Box<Searcher>>> = helpers
+                    .into_iter()
+                    .map(|mut h| {
+                        let lim = helper_limits.clone();
+                        std::thread::Builder::new()
+                            .stack_size(SEARCH_STACK)
+                            .spawn(move || {
+                                h.search(&board, &lim);
+                                h
+                            })
+                            .unwrap()
+                    })
+                    .collect();
                 let (mv, _) = searcher.search(&board, &limits);
+                stop.store(true, Ordering::Relaxed);
                 println!("bestmove {mv}");
-                searcher
+                let helpers = running.into_iter().map(|j| j.join().expect("helper thread panicked")).collect();
+                (searcher, helpers)
             })
             .unwrap();
         self.handle = Some(handle);
@@ -143,7 +191,7 @@ pub fn run() {
                 println!("id name {NAME} {}", env!("CARGO_PKG_VERSION"));
                 println!("id author Harryf2201 & Claude");
                 println!("option name Hash type spin default 16 min 1 max 65536");
-                println!("option name Threads type spin default 1 min 1 max 1");
+                println!("option name Threads type spin default 1 min 1 max {MAX_THREADS}");
                 println!("option name Move Overhead type spin default 10 min 0 max 5000");
                 println!("option name EvalFile type string default <embedded>");
                 println!("option name SyzygyPath type string default <empty>");
@@ -157,6 +205,9 @@ pub fn run() {
                 e.wait();
                 e.tt.clear();
                 e.searcher.as_mut().unwrap().clear();
+                for h in e.helpers.iter_mut() {
+                    h.clear();
+                }
             }
             "setoption" => {
                 let name_end = tokens.iter().position(|&t| t == "value").unwrap_or(tokens.len());
@@ -164,6 +215,7 @@ pub fn run() {
                 let value = tokens.get(name_end + 1).copied().unwrap_or("");
                 match name.as_str() {
                     "hash" => e.set_hash(value.parse().unwrap_or(16)),
+                    "threads" => e.set_threads(value.parse().unwrap_or(1)),
                     "move overhead" => e.overhead_ms = value.parse().unwrap_or(10),
                     "evalfile" => {
                         e.wait();
