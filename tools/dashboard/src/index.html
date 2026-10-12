@@ -589,7 +589,6 @@ function nowRows() {
   const local = genRun.filter(g => !g.source), cloud = genRun.filter(g => g.source === 'cloud');
   genRun.filter(g => g.source === 'oracle').forEach(g => rows.push({ state: 'running', icon: '🖥️', t: 'Oracle Cloud server is generating training data', d: `${g.threads} cores, always on · about ${big(g.rate_h || 0)} per hour · ${big(g.positions)} positions collected so far`, go: 'lab' }));
   local.forEach(g => rows.push({ state: 'running', icon: '🧪', t: 'Generating training data on this PC', d: `${big(g.positions)} positions so far · about ${big(Math.round((g.rate || 0) * 3600))} per hour · the engine plays itself and keeps the positions`, go: 'lab' }));
-  if (!local.length) rows.push({ state: 'idle', icon: '🧪', t: 'Training-data generation on this PC is off', d: lab && lab.datagen === false ? 'Use Start lab to resume it.' : '', go: 'lab' });
   cloud.forEach(g => {
     const left = Math.max(0, (g.minutes || 330) * 60 + 300 - (g.now - g.started));
     rows.push({ state: 'running', icon: '☁️', t: 'Cloud data batch is running on GitHub', d: `${g.jobs_running || 0} of ${g.jobs_total || 0} jobs running · about ${dur(left)} left · ${g.positions ? big(g.positions) + ' positions downloaded so far' : g.est_per_job ? '~' + big(Math.round(g.est_per_job * (g.jobs_total || 0) * Math.min(1, (g.now - g.started) / ((g.minutes || 330) * 60)))) + ' positions generated so far (est.)' : 'positions download when jobs finish'}`, go: 'lab' });
@@ -625,7 +624,7 @@ function nowRows() {
 
 function labControls() {
   if (!lab) return '';
-  const parts = ['datagen', 'watchdog', 'cloud_sync', 'oracle_sync'];
+  const parts = ['watchdog', 'cloud_sync', 'oracle_sync'];
   const on = parts.filter(k => lab[k]).length;
   const paused = health && ['manual', 'warn', 'critical'].includes(health.level);
   let b = '';
@@ -1342,7 +1341,7 @@ function renderHealth() {
 
 function renderLab() {
   if (!lab) return '<div class="empty">Loading…</div>';
-  const parts = [['datagen', 'Data generation on this PC'], ['watchdog', 'Watchdog (temperature safety)'], ['cloud_sync', 'Cloud sync (downloads GitHub data)'], ['oracle_sync', 'Oracle sync (collects data from the Oracle server)']];
+  const parts = [['watchdog', 'Watchdog (temperature safety)'], ['cloud_sync', 'Cloud sync (downloads GitHub data)'], ['oracle_sync', 'Oracle sync (collects data from the Oracle server)']];
   const on = parts.filter(([k]) => lab[k]).length;
   const status = lab.busy ? (lab.busy === 'start' ? 'Starting…' : 'Stopping…') : on === parts.length ? 'Everything is running' : on === 0 ? 'The lab is stopped' : `Partly running (${on} of ${parts.length})`;
   const top = `<div class="panel run">
@@ -1374,7 +1373,7 @@ async function doAction(what) {
 
 // ---- Rendering ----
 function renderHeader() {
-  const w = lab ? ['datagen', 'watchdog', 'cloud_sync', 'oracle_sync'] : [];
+  const w = lab ? ['watchdog', 'cloud_sync', 'oracle_sync'] : [];
   const on = w.filter(k => lab[k]).length;
   const label = !lab ? '' : lab.busy ? (lab.busy === 'start' ? 'Starting…' : 'Stopping…') : on === w.length ? 'Lab running' : on === 0 ? 'Lab stopped' : `Lab partly running`;
   const dot = !lab ? 'stopped' : lab.busy || on === w.length ? 'running' : on === 0 ? 'stopped' : 'finished';
