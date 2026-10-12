@@ -691,7 +691,7 @@ function renderGoals() {
 }
 
 function renderOverview(m) {
-  return renderHero(m) + renderExperiments(m) + renderNow() + renderGoals();
+  return renderHero(m) + renderExperiments(m) + renderNow() + renderLichess() + renderGoals();
 }
 
 /// Experiments (versions with a letter, e.g. v1.2k): how each compares with the version it was
@@ -1347,6 +1347,36 @@ function renderSchedule() {
     <div class="sub" style="margin-top:4px">Versions that train and test themselves on a schedule, so the lab keeps working while nobody is at the PC.</div>${rows}${more}</div>`;
 }
 
+// ---- Lichess bot (/api/lichess): tools\lichess-sync.ps1 reads the bot account every 2 minutes ----
+let lichess = null;
+function renderLichess() {
+  if (!lichess) return '';
+  const l = lichess, age = Date.now() / 1000 - l.updated;
+  const live = age < 600;
+  const total = l.recent.length;
+  const done = l.recent.filter(g => g.result !== 'playing');
+  const w = done.filter(g => g.result === 'win').length, d = done.filter(g => g.result === 'draw').length, lo = done.filter(g => g.result === 'loss').length;
+  const rated = l.recent.filter(g => g.rated && g.result !== 'playing');
+  const rw = rated.filter(g => g.result === 'win').length, rd = rated.filter(g => g.result === 'draw').length, rl = rated.filter(g => g.result === 'loss').length;
+  const score = n => n.length ? Math.round(100 * (n.filter(g => g.result === 'win').length + 0.5 * n.filter(g => g.result === 'draw').length) / n.length) + '%' : '–';
+  const ratings = l.perfs.length
+    ? l.perfs.map(p => `<div class="card"><div class="k">${esc(p.perf[0].toUpperCase() + p.perf.slice(1))}</div><div class="v">${p.rating}${p.prov ? '<span class="sub" style="font-size:.5em">?</span>' : ''}</div><div class="d">${p.games} rated game${p.games === 1 ? '' : 's'} · ±${Math.round(p.rd)}</div></div>`).join('')
+    : `<div class="card wide"><div class="k">Rating</div><div class="v">–</div><div class="d">No rated games yet. Rated games against other bots will give the bot a Lichess rating.</div></div>`;
+  const resWord = { win: 'Won', loss: 'Lost', draw: 'Drew', playing: 'Playing' };
+  const rows = l.recent.slice(0, 10).map(g => `<tr><td class="${g.result === 'win' ? 'pos' : g.result === 'loss' ? 'neg' : ''}"><b>${resWord[g.result]}</b></td>
+    <td><a href="https://lichess.org/${esc(g.id)}" target="_blank" rel="noopener">${esc(g.opponent)}</a>${g.opp_rating ? ` <span class="sub">${g.opp_rating}</span>` : ''}${g.bot ? ' <span class="pill">bot</span>' : ''}</td>
+    <td class="num sub">${esc(g.clock || g.speed)}</td><td class="num sub">${g.rated ? 'rated' + (g.diff != null ? ' ' + (g.diff > 0 ? '+' : '') + g.diff : '') : 'casual'}</td>
+    <td class="num sub">${g.ended ? when(g.ended / 1000) : ''}</td></tr>`).join('');
+  const body = `<p class="lead">The engine plays live games on Lichess as <b>${esc(l.username)}</b> (a BOT account): it accepts challenges and challenges other bots by itself. Lichess ratings are a different scale from the Stockfish-anchored ratings above, so use them to compare, not as exact Elo.</p>
+    <div class="cards">${ratings}
+      <div class="card"><div class="k">Last ${total} games</div><div class="v">${w}–${d}–${lo}</div><div class="d">win–draw–loss · score ${score(done)}${rated.length ? ` · rated ${rw}–${rd}–${rl}` : ''}</div></div>
+    </div>
+    ${rows ? `<h4>Recent games</h4><div class="cl-wrap"><table class="cl"><tbody>${rows}</tbody></table></div>` : ''}
+    <div class="sub" style="font-size:12px;margin-top:8px">${l.playing ? l.playing + ' game in progress · ' : ''}${live ? 'updated ' + hm(l.updated) : 'status is stale (the sync script is not running)'} · <a href="https://lichess.org/@/${esc(l.username)}" target="_blank" rel="noopener">profile</a></div>`;
+  const sum = (l.perfs.length ? l.perfs.map(p => p.rating).join(' / ') + ' · ' : '') + `${w}–${d}–${lo}` + (l.playing ? ' · playing now' : '');
+  return section('sec:lichess', 'Lichess bot', sum, `<div class="panel run">${body}</div>`, true);
+}
+
 // ---- Search tuning (SPSA, /api/spsa): tools\spsa.ps1 nudging the search parameters ----
 let spsa = null, spsaPace = null;
 const spsaRunning = () => spsa && !spsa.stop_requested && spsa.now - spsa.updated < 900;
@@ -1378,7 +1408,7 @@ function renderSpsa() {
   const body = `<p class="lead">Two copies of the engine with slightly different search settings play fast games (6+0.06) against each other; after every round each setting moves a little towards the copy that did better. The tuned values are tested against Stockfish before they are used.</p>
     <div class="cards">
       <div class="card wide"><div class="k">Progress</div><div class="v">${it} <span class="sub" style="font-size:.55em">/ ${planned} rounds · ${p.toFixed(1)}%</span></div>
-        <div class="d">${big(s.games)} games · ${spsaRunning() ? (left ? 'about ' + left + ' left at this pace' : 'running (measuring its pace)') : spsa.stop_requested ? 'stopping (STOP file)' : 'not running'} · 16 games at a time, 4 while a test runs</div><div class="bar big"><div style="width:${p}%"></div></div></div>
+        <div class="d">${big(s.games)} games · ${spsaRunning() ? (left ? 'about ' + left + ' left at this pace' : 'running (measuring its pace)') : spsa.stop_requested ? 'stopping (STOP file)' : 'not running'} · 15 games at a time, 3 while a test runs (one thread stays free for the Lichess bot)</div><div class="bar big"><div style="width:${p}%"></div></div></div>
     </div>
     <h4>Settings: default → tuned so far</h4>
     <div class="sub" style="font-size:12px;margin-bottom:6px">The faint dot is the default, the blue dot the current tuned value, on the setting's allowed range. Early on the values wander; they settle as the steps get smaller.</div>
@@ -1458,7 +1488,7 @@ function renderLab() {
     ${parts.map(([k, n]) => `<div class="now-row" style="cursor:default"><span class="dot ${lab[k] ? 'running' : 'stopped'}"></span><div class="now-main"><div class="now-t" style="${lab[k] ? '' : 'color:var(--muted);font-weight:500'}">${n}</div></div><span class="sub">${lab[k] ? 'on' : 'off'}</span></div>`).join('')}
     ${lab.log && lab.log.length && lab.log_time && Date.now() / 1000 - lab.log_time < 6 * 3600 ? `<div class="sub" style="margin-top:10px;font-size:12px;white-space:pre-wrap">Last start/stop from the dashboard (${when(lab.log_time)}):\n${esc(lab.log.join('\n'))}</div>` : ''}
   </div>`;
-  return `<h2 style="margin-top:4px">Lab</h2>` + top + renderHealth() + renderDataLink() + renderTraining() + renderSpsa();
+  return `<h2 style="margin-top:4px">Lab</h2>` + top + renderHealth() + renderDataLink() + renderTraining() + renderSpsa() + renderLichess();
 }
 
 // ---- Actions (POST + custom header, which other websites can't send to this server) ----
@@ -1510,9 +1540,9 @@ async function poll() {
   const j = async u => { try { return await (await fetch(u)).json(); } catch (e) { return undefined; } };
   const n = pollN++;
   try {
-    const [h, l, t, s, g, r, rt, a, cat, pr, sp] = await Promise.all([
+    const [h, l, t, s, g, r, rt, a, cat, pr, sp, li] = await Promise.all([
       j('/api/health'), j('/api/lab'), j('/api/training'), j('/api/schedule'), j('/api/datagen'), j('/api/runs'),
-      j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'), j('/api/prepare'), j('/api/spsa'),
+      j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'), j('/api/prepare'), j('/api/spsa'), j('/api/lichess'),
     ]);
     if (r === undefined) throw new Error('unreachable');
     health = h ?? null; lab = l ?? null; schedule = s ?? null;
@@ -1526,6 +1556,7 @@ async function poll() {
     if (pr) { preps = pr; preps.forEach(trackPrep); }
     if (rt) ratings = rt;
     spsa = sp ?? null;
+    lichess = li ?? null;
     if (a) ach = a;
     const champ = latestChampionship();
     const want = runs.filter(x => x.status === 'running' || isOpen('run:' + x.id) || x === champ).map(x => x.id);

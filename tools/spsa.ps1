@@ -5,7 +5,8 @@
 # stopped and resumed at any time.
 #   .\tools\spsa.ps1                    start or resume (testing\spsa\state.json)
 #   create testing\spsa\STOP            to stop after the current iteration
-# Plays 16 games at a time when no other tournament is running, 4 when one is (tests come first).
+# Plays 15 games at a time when no other tournament is running, 3 when one is (tests come first;
+# one thread stays free for the Lichess bot).
 param(
     [string]$Engine = 'pawnstorm-spsa-build',
     [string]$Net = 'pawnstorm-v1.7m.nnue',
@@ -58,7 +59,8 @@ while ($state.k -lt $N -and -not (Test-Path "$dir\STOP")) {
     }
     # Tests and tournaments come first: only 4 games at a time while one is running.
     $others = @(Get-CimInstance Win32_Process -Filter "Name='fastchess.exe'" | Where-Object { $_.CommandLine -notmatch 'name=spsa-a' })
-    $conc = if ($others.Count) { 4 } else { 16 }
+    # (One thread always stays free for the Lichess bot, which plays in real time.)
+    $conc = if ($others.Count) { 3 } else { 15 }
     $out = & $fastchess -engine "cmd=$exe" name=spsa-a @optsA -engine "cmd=$exe" name=spsa-b @optsB `
         -each "tc=$TC" option.Hash=16 "option.EvalFile=$LabRoot\engines\$Net" `
         -openings "file=$LabRoot\books\8moves_v3.pgn" format=pgn order=random -srand ($state.started + $k) `
