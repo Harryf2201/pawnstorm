@@ -1,8 +1,9 @@
-# Starts everything for a session: sensors, dashboard, watchdog, cloud sync, auto-training and
-# local data generation (resuming where it left off). Anything already running is left alone.
+# Starts everything for a session: sensors, dashboard, watchdog, cloud sync and Oracle sync.
+# Anything already running is left alone.
 # Usage: .\tools\lab-start.ps1            (or the "Pawnstorm Lab - Start" desktop shortcut)
-# Local data generation: gen3 = self-play with the v1.3 network (gen2-v08-5k used v0.8's, gen1-pesto-5k the hand-crafted eval).
-param([int]$DatagenThreads = 18, [int64]$DatagenTarget = 1000000000, [string]$DatagenName = 'gen3-v13-5k', [string]$DatagenExe = 'pawnstorm-datagen-gen3', [switch]$NoBrowser)
+# Training data now comes from the cloud (GitHub batches + the Oracle server); this PC is kept for
+# testing. -LocalDatagen also starts self-play here (resuming where it left off), sized to the load.
+param([switch]$LocalDatagen, [int]$DatagenThreads = 18, [int64]$DatagenTarget = 1000000000, [string]$DatagenName = 'gen3-v13-5k', [string]$DatagenExe = 'pawnstorm-datagen-gen3', [switch]$NoBrowser)
 
 . "$PSScriptRoot\paths.ps1"
 $ps = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File')
@@ -42,8 +43,10 @@ Start-Hidden 'cloud-sync.ps1' @('-IntervalSeconds', '120')
 # Data from the always-on Oracle Cloud server (configured in tools\engines.local.ps1, if any).
 if ($OracleHost) { Start-Hidden 'oracle-sync.ps1' }
 
-# 5. Local self-play data generation (resumes counts and files).
-if (-not (Get-Process pawnstorm-datagen* -ErrorAction SilentlyContinue)) {
+# 5. Local self-play data generation (resumes counts and files), only with -LocalDatagen.
+if (-not $LocalDatagen) {
+    "  local data generation off (data comes from the cloud; use -LocalDatagen to run it here too)"
+} elseif (-not (Get-Process pawnstorm-datagen* -ErrorAction SilentlyContinue)) {
     $dir = "$LabRoot\datagen\$DatagenName"
     $have = 0
     if (Test-Path "$dir\status.txt") { $have = [int64](((Get-Content "$dir\status.txt" | Select-String '^positions=') -replace 'positions=', '')) }
@@ -59,7 +62,7 @@ if (-not (Get-Process pawnstorm-datagen* -ErrorAction SilentlyContinue)) {
 # 6. Keep datagen sized to the load (few threads during tournaments, many when idle).
 #    (auto-train.ps1, the old milestone scheduler, is retired: versions are now trained deliberately
 #    with train-version.ps1.)
-Start-Hidden 'datagen-adapt.ps1'
+if ($LocalDatagen) { Start-Hidden 'datagen-adapt.ps1' @('-Name', $DatagenName, '-Exe', $DatagenExe) }
 
 Start-Sleep 2
 if (-not $NoBrowser) { Start-Process 'http://localhost:8000' }

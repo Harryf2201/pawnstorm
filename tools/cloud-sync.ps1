@@ -59,15 +59,21 @@ function Sync-Run($run) {
     $id = $run.databaseId
     $dir = "$DataRoot\cloud-$id"
     New-Item -ItemType Directory -Force $dir | Out-Null
-    # A chained follow-up batch (started by GitHub, not cloud-datagen.ps1) inherits its parent's settings.
+    # A chained follow-up batch (started by GitHub, not cloud-datagen.ps1) inherits its parent's
+    # settings; its data generation comes from nets/default.gen in the commit it actually ran.
     if (-not (Test-Path "$dir\launch.txt")) {
         $parent = Get-ChildItem $DataRoot -Directory -Filter 'cloud-*' |
             Where-Object { [int64]($_.Name -replace '\D', '') -lt $id -and (Test-Path "$($_.FullName)\launch.txt") } |
             Sort-Object { [int64]($_.Name -replace '\D', '') } | Select-Object -Last 1
         $pl = if ($parent) { Get-Content "$($parent.FullName)\launch.txt" } else { @() }
-        $pc = $pl | Select-String '^chain=(\d+)'
-        if ($pc -and [int]$pc.Matches[0].Groups[1].Value -gt 0) {
-            $child = $pl | ForEach-Object { if ($_ -match '^chain=(\d+)') { "chain=$([int]$Matches[1] - 1)" } else { $_ } }
+        if ($pl) {
+            $child = $pl | ForEach-Object { if ($_ -match '^chain=(\d+)') { "chain=$([math]::Max(0, [int]$Matches[1] - 1))" } else { $_ } }
+            $sha = (gh run view $id --json headSha | ConvertFrom-Json).headSha
+            $g = gh api "repos/{owner}/{repo}/contents/nets/default.gen?ref=$sha" --jq '.content' 2>$null
+            if ($g) {
+                $gv = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String(($g -join ''))).Trim()
+                $child = @($child | Where-Object { $_ -notmatch '^gen=' }) + "gen=$gv"
+            }
             [IO.File]::WriteAllLines("$dir\launch.txt", [string[]]$child)
         }
     }
