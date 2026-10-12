@@ -1,6 +1,6 @@
 # Always-on data generation server
 
-Gen2 self-play on an Oracle Cloud Always Free ARM server (VM.Standard.A1.Flex, 4 OCPUs, 24 GB, Ubuntu 24.04).
+Self-play (currently gen4, see nets/default.gen) on an Oracle Cloud Always Free ARM server (VM.Standard.A1.Flex, 4 OCPUs, 24 GB, Ubuntu 24.04).
 
 Setup on the server (as `ubuntu`):
 
@@ -15,4 +15,5 @@ Setup on the server (as `ubuntu`):
 On the PC, set `$OracleHost` and `$OracleKey` in `tools\engines.local.ps1` (not committed);
 `tools\oracle-sync.ps1` (started by lab-start) collects the finished 1-hour segments.
 To switch the network it generates with: commit a new `nets/default.bin`, then on the server
-`cd ~/pawnstorm && git pull && cargo build --release --bin pawnstorm && sudo systemctl restart pawnstorm-datagen`.
+`cd ~/pawnstorm && git pull && ~/.cargo/bin/cargo build --release --bin pawnstorm && sudo systemctl restart pawnstorm-datagen`
+(the full cargo path matters over a non-interactive ssh), and change oracle-sync.ps1's -Name to the new generation's folder.
