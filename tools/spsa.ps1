@@ -26,6 +26,8 @@ $job = @{ Id = 'spsa'; Title = 'Search tuning (SPSA)' }
 $params = @("uci`nquit" | & $exe | Where-Object { $_ -match '^option name (\S+) type spin default (-?\d+) min (-?\d+) max (-?\d+)' } | ForEach-Object {
         [pscustomobject]@{ Name = $Matches[1]; Default = [int]$Matches[2]; Min = [int]$Matches[3]; Max = [int]$Matches[4] }
     } | Where-Object { $_.Name -notin 'Hash', 'Threads', 'Move' })
+# For the dashboard: each parameter's default and range.
+$params | ConvertTo-Json | Set-Content "$dir\params.json" -Encoding ascii
 $stateFile = "$dir\state.json"
 if (Test-Path $stateFile) {
     $state = Get-Content $stateFile -Raw | ConvertFrom-Json
@@ -75,6 +77,7 @@ while ($state.k -lt $N -and -not (Test-Path "$dir\STOP")) {
     }
     $state.k += $PairsPerIteration
     $state.games += $w + $l + $d
+    $state | Add-Member -NotePropertyName planned -NotePropertyValue $Iterations -Force
     $state | ConvertTo-Json -Depth 4 | Set-Content $stateFile -Encoding ascii
     Add-Content $history ("$($state.k / $PairsPerIteration),$($state.games),$w,$l,$d," + (($params | ForEach-Object { [math]::Round($state.theta.($_.Name), 2) }) -join ',')) -Encoding ascii
     # The parameters that have moved furthest from their defaults, relative to their range.

@@ -377,11 +377,32 @@ const label = n => { const s = short(n), t = titleMap[s]; return t ? s + ' · ' 
 /// Main versions are plain numbers (v1.3); experiments add a letter (v1.2k). Dropped and planned ones aren't main.
 const isMajor = name => { const c = catalog.find(v => v.name === name); return /^v\d+(\.\d+)+$/.test(name) && !(c && ['failed', 'planned', 'testing', 'shelved'].includes(c.status)); };
 
+/// Rating from the games against Elo-limited Stockfish alone (fixed anchors), so games between our
+/// own versions can't inflate it. Needs at least 20 such games.
+function sfOnly(vs) {
+  const opp = vs.filter(o => o.anchor != null && o.w + o.d + o.l > 0);
+  const n = opp.reduce((s, o) => s + o.w + o.d + o.l, 0);
+  if (n < 20) return null;
+  let R = opp.reduce((s, o) => s + o.anchor * (o.w + o.d + o.l), 0) / n, info = 1;
+  for (let it = 0; it < 100; it++) {
+    let g = 0; info = 0;
+    for (const o of opp) {
+      // Half a virtual draw per opponent keeps 100% scores finite.
+      const m = o.w + o.d + o.l + 0.5, s = o.w + o.d / 2 + 0.25, e = 1 / (1 + Math.pow(10, (o.anchor - R) / 400));
+      g += s - m * e; info += m * e * (1 - e);
+    }
+    const step = Math.max(-200, Math.min(200, 400 / Math.LN10 * g / info));
+    R += step;
+    if (Math.abs(step) < 0.01) break;
+  }
+  return { rating: R, err: 1.96 * 400 / Math.LN10 / Math.sqrt(info), games: n };
+}
+
 /// Everything about the engine versions, derived from the server's joint rating fit.
 function versionModel() {
   const pts = ratings.filter(r => isOurs(r.name)).map(r => ({
     key: short(r.name), name: short(r.name), short: short(r.name), perf: r.rating, err: r.err,
-    games: r.games, first: r.first_seen, live: r.live, vs: (r.vs || []).map(o => ({ ...o, name: short(o.name), n: o.w + o.d + o.l })),
+    games: r.games, first: r.first_seen, live: r.live, vs: (r.vs || []).map(o => ({ ...o, name: short(o.name), n: o.w + o.d + o.l })), sf: sfOnly(r.vs || []),
   })).sort((a, b) => a.first - b.first);
   pts.forEach(p => { p.title = titleMap[p.key] || ''; p.label = p.title ? p.key + ' · ' + p.title : p.key; });
   // Headline = strongest main version. Versions with too few games (huge error margin) don't qualify,
@@ -555,6 +576,7 @@ function renderHero(m) {
       <div class="rating">${cur.perf.toFixed(0)} <small>±${cur.err.toFixed(0)}</small></div>
       <div>${delta == null ? '<span class="chip">First version</span>' : `<span class="chip ${delta > 0 ? 'good' : ''}">${sign(delta)} Elo</span> <span class="sub">over the previous best (${esc(prev.short)})</span>`}</div>
       <div class="level">${levelText(cur)}</div>
+      ${cur.sf ? `<div class="sub" style="margin-top:6px">Against Stockfish only: <b>${cur.sf.rating.toFixed(0)}</b> ±${cur.sf.err.toFixed(0)} <span style="font-size:12px">(${cur.sf.games} games; the rating above also counts games between our own versions, which tend to flatter new versions)</span></div>` : ''}
       <div class="facts">
         <div class="fact"><div class="k">Versions tested</div><div class="v">${m.pts.length}${experiments ? `<span class="sub" style="font-weight:500;font-size:12px"> · ${experiments} experiment${experiments > 1 ? 's' : ''} didn't help</span>` : ''}</div></div>
         <div class="fact"><div class="k">Games played</div><div class="v">${big(gamesAll)}</div></div>
@@ -574,6 +596,8 @@ function nowRows() {
   const rows = [], alerts = [];
   const live = runs.filter(r => r.status === 'running');
   if (!live.length) rows.push({ state: 'idle', icon: '⚔️', t: 'No tournaments running', d: 'Tournaments are batches of games that measure how strong a version is.', go: 'tournaments' });
+  const tune = spsaRow();
+  if (tune) rows.push(tune);
   live.forEach(r => {
     const d = details[r.id];
     const s = d && d.summary, n = s ? s.w + s.d + s.l : r.games;
@@ -587,7 +611,7 @@ function nowRows() {
   });
   const genRun = gens.filter(genRunning);
   const local = genRun.filter(g => !g.source), cloud = genRun.filter(g => g.source === 'cloud');
-  genRun.filter(g => g.source === 'oracle').forEach(g => rows.push({ state: 'running', icon: '🖥️', t: 'Oracle Cloud server is generating training data', d: `${g.threads} cores, always on · about ${big(g.rate_h || 0)} per hour · ${big(g.positions)} positions collected so far`, go: 'lab' }));
+  genRun.filter(g => g.source === 'oracle').forEach(g => rows.push({ state: 'running', icon: '🖥️', t: `Oracle Cloud server is generating gen${genOf(g)} training data`, d: `${g.threads} cores, always on · about ${big(g.rate_h || 0)} per hour · ${big(g.positions)} positions collected so far`, go: 'data' }));
   local.forEach(g => rows.push({ state: 'running', icon: '🧪', t: 'Generating training data on this PC', d: `${big(g.positions)} positions so far · about ${big(Math.round((g.rate || 0) * 3600))} per hour · the engine plays itself and keeps the positions`, go: 'lab' }));
   cloud.forEach(g => {
     const left = Math.max(0, (g.minutes || 330) * 60 + 300 - (g.now - g.started));
@@ -733,7 +757,7 @@ function renderVersions(m) {
           <div class="vchips">${c ? statusChip(status) : '<span class="chip">Not in versions.ini</span>'}
             ${p && p.live ? '<span class="chip info"><span class="dot running"></span>Games being played</span>' : p && p.provisional ? '<span class="chip">Few games so far</span>' : ''}
             ${p && p.strongest ? '<span class="chip best">★ Highest measured rating</span>' : ''}</div></div>
-        <div class="vrate">${p ? `<b>${p.perf.toFixed(0)}</b><small>±${p.err.toFixed(0)} Elo · ${p.games} games</small>` : `<b class="sub">–</b><small>${status === 'planned' ? 'not built yet' : 'not rated yet'}</small>`}</div>
+        <div class="vrate">${p ? `<b>${p.perf.toFixed(0)}</b><small>±${p.err.toFixed(0)} Elo · ${p.games} games</small>${p.sf ? `<small style="display:block">vs Stockfish only: ${p.sf.rating.toFixed(0)} ±${p.sf.err.toFixed(0)}</small>` : ''}` : `<b class="sub">–</b><small>${status === 'planned' ? 'not built yet' : 'not rated yet'}</small>`}</div>
       </div>
       ${c && c.summary ? `<div class="vsum">${esc(c.summary)}</div>` : c ? '' : `<div class="vsum sub">This engine has been rated but is not described in versions.ini yet. Add a section with <code>engines = ${esc(name)}</code>.</div>`}
       ${buildBlock(name, !!p)}
@@ -1102,8 +1126,9 @@ function renderDataLink() {
 // ---- Data tab: training data by generation (which network played the games) and by source ----
 const GEN_INFO = {
   1: { net: 'hand-written eval (PeSTO)', used: 'v0.2 – v0.8.1', note: 'retired: mixing it in made v1.2b weaker' },
-  2: { net: 'v0.8 network', used: 'v1.0 – v1.5' },
-  3: { net: 'v1.3 network', used: 'the next network' },
+  2: { net: 'v0.8 network', used: 'v1.0 – v1.7' },
+  3: { net: 'v1.3 network', used: 'v1.6 – v1.7' },
+  4: { net: 'v1.7m network', used: 'the next network' },
 };
 const SOURCES = [['local', 'This PC'], ['oracle', 'Oracle server'], ['cloud', 'GitHub cloud']];
 const genOf = g => +g.gen || +((g.name.match(/^(?:oracle-)?gen(\d+)/) || [])[1]) || (g.eval === 'nnue' ? 2 : 1);
@@ -1164,11 +1189,19 @@ function renderData() {
 
   // Production now and when the newest generation reaches the next milestones.
   const nowList = cell(newestGen), fl = sumFlow(nowList), have = sumPos(nowList) + fl.pending;
-  const perSrc = SOURCES.map(([s, n]) => { const f = sumFlow(cell(newestGen, s)); return `<div class="card"><div class="k">${n}</div><div class="v">${f.rate ? big(Math.round(f.rate)) : '–'}<span class="sub" style="font-size:.55em">${f.rate ? ' / hour' : ''}</span></div><div class="d">${f.rate ? 'gen' + newestGen : 'idle or queued'}</div></div>`; }).join('');
+  const perSrc = SOURCES.map(([s, n]) => { const f = sumFlow(cell(newestGen, s)); return `<div class="card"><div class="k">${n}</div><div class="v">${f.rate ? big(Math.round(f.rate)) : '–'}<span class="sub" style="font-size:.55em">${f.rate ? ' / hour' : ''}</span></div><div class="d">${f.rate ? 'gen' + newestGen : idleNote(s)}</div></div>`; }).join('');
   const marks = [50e6, 100e6, 150e6, 200e6, 300e6, 500e6].filter(m => m > have).slice(0, 3);
   const eta = fl.rate ? marks.map(m => { const h = (m - have) / fl.rate; const at = new Date(Date.now() + h * 3600e3); return `<div class="now-row"><div class="now-main"><div class="now-t">${big(m)} gen${newestGen} positions</div><div class="now-d">in about ${dur(h * 3600)} · around ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${at.getDate() !== new Date().getDate() ? ' tomorrow' : ''}</div></div></div>`; }).join('') : '<div class="sub">Nothing is generating right now.</div>';
+  // A source still finishing an older generation (the cloud runs whole batches) switches over after it.
+  function idleNote(s) {
+    const older = gens.filter(g => srcOf(g) === s && genRunning(g) && g.state !== 'queued' && genOf(g) < newestGen)[0];
+    if (!older) return s === 'local' ? 'off: this PC is kept for testing' : 'idle or queued';
+    const left = s === 'cloud' ? Math.max(0, (older.minutes || 330) * 60 + 300 - (older.now - older.started)) : 0;
+    return `finishing a gen${genOf(older)} batch${left ? ' (about ' + dur(left) + ' left)' : ''}; then gen${newestGen}`;
+  }
+  const switching = gens.some(g => srcOf(g) === 'cloud' && genRunning(g) && g.state !== 'queued' && genOf(g) < newestGen);
   const queued = gens.filter(g => g.state === 'queued').map(g => `GitHub batch ${esc(g.run_id)} (gen${genOf(g)}) is queued and starts when the current batch finishes.`).join(' ');
-  const prod = `<div class="cards">${perSrc}<div class="card"><div class="k">All sources</div><div class="v">${big(Math.round(fl.rate))}<span class="sub" style="font-size:.55em"> / hour</span></div><div class="d">${big(have)} gen${newestGen} so far, counting data still on the servers</div></div></div>
+  const prod = `<div class="cards">${perSrc}<div class="card"><div class="k">All sources</div><div class="v">${big(Math.round(fl.rate))}<span class="sub" style="font-size:.55em"> / hour</span></div><div class="d">${big(have)} gen${newestGen} so far, counting data still on the servers${switching ? '. The times below leave out the GitHub cloud until its first gen' + newestGen + ' batch is running, so they will come sooner.' : ''}</div></div></div>
     <div class="panel" style="margin-top:12px">${eta}${queued ? `<div class="sub" style="font-size:12px;margin-top:8px">${queued}</div>` : ''}</div>`;
 
   // Details: one section per generation, each split by source.
@@ -1295,8 +1328,14 @@ const nextJob = () => jobs().filter(j => !['done', 'failed', 'stopped'].includes
 const JOB_LABEL = { waiting: 'scheduled', preparing: 'preparing data', training: 'training', testing: 'testing', done: 'done', failed: 'failed', stopped: 'stopped' };
 
 function renderSchedule() {
-  const list = jobs().slice().sort((a, b) => (JOB_ORDER[a.state] - JOB_ORDER[b.state]) || (a.start - b.start));
-  if (!list.length) return `<div class="panel run"><h3>📅 Automatic jobs</h3><div class="sub" style="margin-top:4px">Nothing is scheduled. New versions are set up to train and test themselves when there is enough new data; ask Claude to schedule one.</div></div>`;
+  // Search tuning has its own section; finished jobs older than 6 hours fold away.
+  const all = jobs().filter(j => j.id !== 'spsa').sort((a, b) => (JOB_ORDER[a.state] - JOB_ORDER[b.state]) || (a.start - b.start));
+  const old = j => j.state === 'done' && Date.now() / 1000 - j.updated > 6 * 3600;
+  const showOld = isOpen('old-jobs');
+  const list = all.filter(j => showOld || !old(j));
+  const nOld = all.filter(old).length;
+  const more = nOld ? `<div class="now-row" data-toggle="old-jobs" style="border:0"><span class="chev2">${showOld ? '▾' : '▸'}</span><div class="now-main"><div class="now-d">${showOld ? 'Hide' : 'Show'} ${nOld} older finished job${nOld > 1 ? 's' : ''}</div></div></div>` : '';
+  if (!list.length) return `<div class="panel run"><h3>📅 Automatic jobs</h3><div class="sub" style="margin-top:4px">Nothing is scheduled right now. New versions are set up to train and test themselves; ask Claude to schedule one.</div>${more}</div>`;
   const rows = list.map(j => {
     const dot = j.state === 'done' ? 'finished' : ['failed', 'stopped'].includes(j.state) ? 'stopped' : j.state === 'waiting' ? 'idle' : 'running';
     const when = j.state === 'waiting' && j.start ? `starts at ${hm(j.start)}${j.start > Date.now() / 1000 ? ' (in ' + dur(j.start - Date.now() / 1000) + ')' : ''}` : j.state === 'stopped' ? 'its script stopped running (e.g. the PC restarted); ask Claude to restart it' : `updated ${hm(j.updated)}`;
@@ -1305,7 +1344,47 @@ function renderSchedule() {
       <div class="now-d">${esc(friendlyText(j.detail))}${j.detail ? ' · ' : ''}${when}</div></div></div>`;
   }).join('');
   return `<div class="panel run"><h3>📅 Automatic jobs</h3>
-    <div class="sub" style="margin-top:4px">Versions that train and test themselves on a schedule, so the lab keeps working while nobody is at the PC.</div>${rows}</div>`;
+    <div class="sub" style="margin-top:4px">Versions that train and test themselves on a schedule, so the lab keeps working while nobody is at the PC.</div>${rows}${more}</div>`;
+}
+
+// ---- Search tuning (SPSA, /api/spsa): tools\spsa.ps1 nudging the search parameters ----
+let spsa = null, spsaPace = null;
+const spsaRunning = () => spsa && !spsa.stop_requested && spsa.now - spsa.updated < 900;
+function spsaRow() {
+  if (!spsa) return null;
+  const s = spsa.state, planned = s.planned || 2000, it = spsa.history.length;
+  return { state: spsaRunning() ? 'running' : 'idle', icon: '🎛️', t: spsaRunning() ? 'Tuning the search (SPSA)' : 'Search tuning is paused',
+    d: `round ${it} of ${planned} · ${big(s.games)} games · ${spsaMoved(2).map(m => `${m.name} ${m.def} → ${m.now}`).join(', ')}`, go: 'lab' };
+}
+/// Parameters sorted by how far they have moved from their defaults, relative to their range.
+function spsaMoved(n) {
+  return spsa.params.map(p => {
+    const now = spsa.state.theta[p.Name];
+    return { name: p.Name, def: p.Default, min: p.Min, max: p.Max, now: Math.round(now * 10) / 10, rel: (now - p.Default) / (p.Max - p.Min) };
+  }).sort((a, b) => Math.abs(b.rel) - Math.abs(a.rel)).slice(0, n || 999);
+}
+function renderSpsa() {
+  if (!spsa) return '';
+  const s = spsa.state, planned = s.planned || 2000, it = spsa.history.length, p = Math.min(100, 100 * it / planned);
+  // Pace measured while this page is open (the tuner records no per-round times).
+  if (!spsaPace || it < spsaPace.it) spsaPace = { it, t: spsa.now };
+  const perRound = it - spsaPace.it >= 2 ? (spsa.now - spsaPace.t) / (it - spsaPace.it) : null;
+  const left = spsaRunning() && perRound ? dur(perRound * (planned - it)) : null;
+  const x = (v, m) => 100 * (v - m.min) / (m.max - m.min);
+  const rows = spsaMoved().map(m => `<tr><td><b>${esc(m.name)}</b></td><td class="num">${m.def}</td><td class="num"><b>${m.now}</b></td>
+    <td class="num ${m.now > m.def ? 'pos' : m.now < m.def ? 'neg' : ''}">${m.now === m.def ? '–' : (m.now > m.def ? '+' : '') + (Math.round((m.now - m.def) * 10) / 10)}</td>
+    <td style="min-width:140px"><div class="cl-track" title="range ${m.min} to ${m.max}"><div class="cl-err" style="left:${Math.min(x(m.def, m), x(m.now, m))}%;width:${Math.abs(x(m.now, m) - x(m.def, m))}%"></div><div class="cl-dot" style="left:${x(m.def, m)}%;opacity:.35"></div><div class="cl-dot ours" style="left:${x(m.now, m)}%"></div></div></td>
+    <td class="num sub">${m.min}–${m.max}</td></tr>`).join('');
+  const body = `<p class="lead">Two copies of the engine with slightly different search settings play fast games (6+0.06) against each other; after every round each setting moves a little towards the copy that did better. The tuned values are tested against Stockfish before they are used.</p>
+    <div class="cards">
+      <div class="card wide"><div class="k">Progress</div><div class="v">${it} <span class="sub" style="font-size:.55em">/ ${planned} rounds · ${p.toFixed(1)}%</span></div>
+        <div class="d">${big(s.games)} games · ${spsaRunning() ? (left ? 'about ' + left + ' left at this pace' : 'running (measuring its pace)') : spsa.stop_requested ? 'stopping (STOP file)' : 'not running'} · 16 games at a time, 4 while a test runs</div><div class="bar big"><div style="width:${p}%"></div></div></div>
+    </div>
+    <h4>Settings: default → tuned so far</h4>
+    <div class="sub" style="font-size:12px;margin-bottom:6px">The faint dot is the default, the blue dot the current tuned value, on the setting's allowed range. Early on the values wander; they settle as the steps get smaller.</div>
+    <div class="cl-wrap"><table class="cl"><thead><tr><th>Setting</th><th class="num">Default</th><th class="num">Tuned</th><th class="num">Change</th><th>Range</th><th class="num"></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const sum = spsaRunning() ? `round ${it} of ${planned}` : 'paused';
+  return section('sec:spsa', 'Search tuning (SPSA)', sum, `<div class="panel run">${body}</div>`, true);
 }
 
 function renderTraining() {
@@ -1379,7 +1458,7 @@ function renderLab() {
     ${parts.map(([k, n]) => `<div class="now-row" style="cursor:default"><span class="dot ${lab[k] ? 'running' : 'stopped'}"></span><div class="now-main"><div class="now-t" style="${lab[k] ? '' : 'color:var(--muted);font-weight:500'}">${n}</div></div><span class="sub">${lab[k] ? 'on' : 'off'}</span></div>`).join('')}
     ${lab.log && lab.log.length && lab.log_time && Date.now() / 1000 - lab.log_time < 6 * 3600 ? `<div class="sub" style="margin-top:10px;font-size:12px;white-space:pre-wrap">Last start/stop from the dashboard (${when(lab.log_time)}):\n${esc(lab.log.join('\n'))}</div>` : ''}
   </div>`;
-  return `<h2 style="margin-top:4px">Lab</h2>` + top + renderHealth() + renderDataLink() + renderTraining();
+  return `<h2 style="margin-top:4px">Lab</h2>` + top + renderHealth() + renderDataLink() + renderTraining() + renderSpsa();
 }
 
 // ---- Actions (POST + custom header, which other websites can't send to this server) ----
@@ -1431,9 +1510,9 @@ async function poll() {
   const j = async u => { try { return await (await fetch(u)).json(); } catch (e) { return undefined; } };
   const n = pollN++;
   try {
-    const [h, l, t, s, g, r, rt, a, cat, pr] = await Promise.all([
+    const [h, l, t, s, g, r, rt, a, cat, pr, sp] = await Promise.all([
       j('/api/health'), j('/api/lab'), j('/api/training'), j('/api/schedule'), j('/api/datagen'), j('/api/runs'),
-      j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'), j('/api/prepare'),
+      j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'), j('/api/prepare'), j('/api/spsa'),
     ]);
     if (r === undefined) throw new Error('unreachable');
     health = h ?? null; lab = l ?? null; schedule = s ?? null;
@@ -1446,6 +1525,7 @@ async function poll() {
     if (cat) setCatalog(cat);
     if (pr) { preps = pr; preps.forEach(trackPrep); }
     if (rt) ratings = rt;
+    spsa = sp ?? null;
     if (a) ach = a;
     const champ = latestChampionship();
     const want = runs.filter(x => x.status === 'running' || isOpen('run:' + x.id) || x === champ).map(x => x.id);
