@@ -915,7 +915,37 @@ function renderChampionship() {
     <h4>Head to head</h4>
     <p class="lead" style="margin:0 0 10px">Each cell is the row engine's score against the column engine (small number = games played). Green: row engine ahead, red: behind.</p>
     <div class="cl-wrap"><table class="xt"><thead><tr><th></th>${hdr}</tr></thead><tbody>${rows}</tbody></table></div>
+    ${champGamesHtml(rr, d, fit)}
   </div>`;
+}
+
+/// One engine's games in the championship: the ones being played now (live boards, when the event
+/// logs engine output) and every finished game, newest first.
+let champGames = { id: null, list: [] };
+function champGamesHtml(rr, d, fit) {
+  const engines = fit.map(f => f.name);
+  const pick = engines.includes(ui.champEngine) ? ui.champEngine : (engines.find(isOurs) || engines[0]);
+  const chips = engines.map(n => `<button class="btn sm ${n === pick ? 'on' : ''}" data-set="champEngine:${esc(n)}">${esc(champName(n))}</button>`).join(' ');
+  const live = (d.live || []).filter(g => g.white === pick || g.black === pick);
+  const mine = champGames.id === rr.id ? champGames.list.filter(g => g[1] === pick || g[2] === pick).reverse() : [];
+  const res = g => g[3] === '1/2-1/2' ? 'd' : ((g[3] === '1-0') === (g[1] === pick) ? 'w' : 'l');
+  const rec = { w: 0, d: 0, l: 0 };
+  mine.forEach(g => rec[res(g)]++);
+  const all = isOpen('champ-all-games');
+  const rowsHtml = (all ? mine : mine.slice(0, 40)).map(g => {
+    const r = res(g), white = g[1] === pick;
+    return `<tr><td class="num sub">${g[0]}</td><td>${white ? '⚪' : '⚫'} ${esc(champName(white ? g[2] : g[1]))}</td>
+      <td class="res-${r}"><b>${r === 'w' ? 'Win' : r === 'l' ? 'Loss' : 'Draw'}</b> <span class="sub">${esc(g[3])}</span></td>
+      <td class="sub">${esc(g[4])}</td><td class="num">${Math.ceil(g[5] / 2)}</td><td class="num sub">${esc(g[6])}</td></tr>`;
+  }).join('');
+  const liveHtml = live.length ? `<div class="games">${live.map(liveGame).join('')}</div>`
+    : `<div class="sub" style="margin:6px 0 10px">${(d.live || []).length ? 'Not playing this moment.' : rr.status === 'running' ? 'Live boards appear when the championship is started with live logging.' : 'The championship has finished.'}</div>`;
+  return `<h4>Games</h4>
+    <div class="toolbar" style="flex-wrap:wrap;gap:6px">${chips}</div>
+    <h4 style="margin-top:12px">${esc(champName(pick))}: playing now (${live.length})</h4>${liveHtml}
+    <h4>${esc(champName(pick))}: finished games <span class="sub" style="font-weight:normal">· ${mine.length} played · ${rec.w} won · ${rec.d} drawn · ${rec.l} lost</span></h4>
+    ${mine.length ? `<div class="tbl"><table><tr><th class="num">#</th><th>Opponent (${esc(champName(pick))}'s colour)</th><th>Result</th><th>How</th><th class="num">Moves</th><th class="num">Time</th></tr>${rowsHtml}</table></div>
+    ${mine.length > 40 ? `<button class="btn sm" data-toggle="champ-all-games" style="margin-top:8px">${all ? 'Show the latest 40' : `Show all ${mine.length}`}</button>` : ''}` : '<div class="sub">No finished games yet.</div>'}`;
 }
 
 function renderTournaments() {
@@ -1422,6 +1452,11 @@ async function poll() {
     const got = await Promise.all(want.map(id => j('/api/run/' + encodeURIComponent(id))));
     details = {};
     want.forEach((id, i) => { if (got[i]) details[id] = got[i]; });
+    // The championship's full games list is bigger, so only while its tab is open, every ~10 s.
+    if (champ && tab === 'championship' && (n % 5 === 0 || champGames.id !== champ.id)) {
+      const gl = await j('/api/run/' + encodeURIComponent(champ.id) + '/games');
+      if (gl) champGames = { id: champ.id, list: gl };
+    }
     $('#updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     loaded = true;
     render();

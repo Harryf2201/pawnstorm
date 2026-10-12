@@ -1761,6 +1761,32 @@ impl App {
         if path == "/api/achievements" {
             return ("200 OK", self.achievements(), "application/json");
         }
+        // Every finished game of one run (for the Championship tab's games list).
+        if let Some(id) = path.strip_prefix("/api/run/").and_then(|p| p.strip_suffix("/games")) {
+            let id = id.replace("%20", " ");
+            self.refresh_all();
+            let runs = self.runs.lock().unwrap();
+            if let Some(r) = runs.get(&id) {
+                let items: Vec<String> = r
+                    .games
+                    .iter()
+                    .enumerate()
+                    .map(|(i, g)| {
+                        format!(
+                            "[{},{},{},{},{},{},{}]",
+                            i + 1,
+                            js(&g.white),
+                            js(&g.black),
+                            js(&g.result),
+                            js(if g.termination.is_empty() || g.termination == "normal" { &g.reason } else { &g.termination }),
+                            g.plies,
+                            js(&g.duration)
+                        )
+                    })
+                    .collect();
+                return ("200 OK", format!("[{}]", items.join(",")), "application/json");
+            }
+        }
         if let Some(id) = path.strip_prefix("/api/run/") {
             let id = id.replace("%20", " ");
             self.refresh_all();
