@@ -42,6 +42,7 @@ if (-not (Get-Process dashboard -ErrorAction SilentlyContinue)) {
 Start-Hidden 'cloud-sync.ps1' @('-IntervalSeconds', '120')
 # Data from the always-on Oracle Cloud server (configured in tools\engines.local.ps1, if any).
 if ($OracleHost) { Start-Hidden 'oracle-sync.ps1' }
+if (Test-Path (Join-Path $Parent 'lichess-bot\config.yml')) { Start-Hidden 'lichess-sync.ps1' }   # Lichess panel on the dashboard
 
 # 5. Local self-play data generation (resumes counts and files), only with -LocalDatagen.
 if (-not $LocalDatagen) {

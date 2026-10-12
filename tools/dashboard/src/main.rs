@@ -1784,6 +1784,15 @@ impl App {
                 "application/json",
             );
         }
+        // Lichess bot (tools\lichess-sync.ps1): the bot account's ratings and recent games.
+        if path == "/api/lichess" {
+            let file = self.root.join("lichess").join("status.json");
+            let body = std::fs::read_to_string(&file)
+                .ok()
+                .map(|s| s.trim_start_matches('\u{feff}').trim().to_string())
+                .filter(|s| s.starts_with('{'));
+            return ("200 OK", body.unwrap_or_else(|| "null".into()), "application/json");
+        }
         if path == "/api/datagen" {
             return ("200 OK", self.datagen(), "application/json");
         }
