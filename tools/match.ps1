@@ -20,6 +20,8 @@ param(
     [string]$Sprt = '0,3',
     [int]$Hash = 16,
     [switch]$Live,
+    # Gauntlet only: the first N engines each play every other engine, but not each other.
+    [int]$Seeds = 1,
     [string]$Notes = ''
 )
 
@@ -61,7 +63,7 @@ foreach ($spec in $Engines) {
 $n = $names.Count
 if ($Rounds -eq 0) { $Rounds = if ($Type -eq 'sprt') { 20000 } else { 50 } }
 $total = switch ($Type) {
-    'gauntlet' { $Rounds * 2 * ($n - 1) }
+    'gauntlet' { $Rounds * 2 * $Seeds * ($n - $Seeds) }
     'roundrobin' { $Rounds * 2 * $n * ($n - 1) / 2 }
     'sprt' { $Rounds * 2 }
 }
@@ -79,7 +81,7 @@ $fcArgs += '-rounds', $Rounds, '-games', 2, '-repeat', '-concurrency', $Concurre
 # Print results (incl. SPRT LLR) every 10 games so the dashboard can follow along.
 $fcArgs += '-ratinginterval', 10
 $fcArgs += '-pgnout', "file=$dir\games.pgn"
-if ($Type -eq 'gauntlet') { $fcArgs += '-tournament', 'gauntlet' }
+if ($Type -eq 'gauntlet') { $fcArgs += '-tournament', 'gauntlet'; if ($Seeds -gt 1) { $fcArgs += '-seeds', $Seeds } }
 if ($Type -eq 'sprt') {
     $e0, $e1 = $Sprt.Split(',')
     $fcArgs += '-sprt', "elo0=$e0", "elo1=$e1", 'alpha=0.05', 'beta=0.05', 'model=normalized'
