@@ -13,6 +13,8 @@ pub const MAX_PLY: usize = 128;
 pub const INF: i32 = 32000;
 pub const MATE: i32 = 31000;
 pub const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
+/// A tablebase win: above any evaluation, below every mate score.
+pub const TB_WIN: i32 = MATE_BOUND - MAX_PLY as i32 - 1;
 const NO_EVAL: i32 = -INF - 1;
 const NO_CONT: usize = usize::MAX;
 const HIST_MAX: i32 = 16384;
@@ -372,6 +374,17 @@ impl Searcher {
             Some(&m) => m,
             None => return (Move::NULL, if board.in_check() { -MATE } else { 0 }),
         };
+        // In a tablebase position, play the tablebase's move straight away.
+        if let Some((mv, outcome)) = crate::tb::root_move(board) {
+            let score = outcome * TB_WIN;
+            if self.print {
+                println!("info depth 1 seldepth 1 score {} nodes 0 tbhits 1 time 0 pv {}", format_score(score), mv.to_uci());
+            }
+            while limits.infinite && !self.stop.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            return (mv, score);
+        }
         let mut best_score = 0;
         let max_depth = limits.depth.unwrap_or(MAX_PLY as i32 - 4).clamp(1, MAX_PLY as i32 - 4);
         let mut score = 0;
@@ -485,6 +498,24 @@ impl Searcher {
                     || (e.bound == BOUND_LOWER && s >= beta)
                     || (e.bound == BOUND_UPPER && s <= alpha))
             {
+                return s;
+            }
+        }
+
+        // Tablebases: right after a capture or pawn move, few enough pieces means a known result.
+        if !root
+            && excluded.is_null()
+            && b.halfmove == 0
+            && crate::tb::max_pieces() > 0
+            && b.occ().count_ones() <= crate::tb::max_pieces()
+        {
+            if let Some(w) = crate::tb::probe_wdl(b) {
+                let s = match w {
+                    1 => TB_WIN - ply as i32,
+                    -1 => -TB_WIN + ply as i32,
+                    _ => 0,
+                };
+                self.tt.store(b.hash, Move::NULL, s, NO_EVAL, (depth + 6).min(MAX_PLY as i32 - 1), BOUND_EXACT);
                 return s;
             }
         }

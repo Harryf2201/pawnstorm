@@ -146,6 +146,7 @@ pub fn run() {
                 println!("option name Threads type spin default 1 min 1 max 1");
                 println!("option name Move Overhead type spin default 10 min 0 max 5000");
                 println!("option name EvalFile type string default <embedded>");
+                println!("option name SyzygyPath type string default <empty>");
                 println!("uciok");
             }
             "isready" => println!("readyok"),
@@ -170,6 +171,12 @@ pub fn run() {
                                 Err(err) => println!("info string {err}"),
                             }
                         }
+                    }
+                    "syzygypath" => {
+                        e.wait();
+                        let path = tokens.get(name_end + 1..).map(|s| s.join(" ")).unwrap_or_default();
+                        let (n, max) = crate::tb::init(&path);
+                        println!("info string syzygy: {n} tables, up to {max} pieces");
                     }
                     _ => {}
                 }

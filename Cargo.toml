@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+shakmaty = "0.30.2"
+shakmaty-syzygy = "0.28.1"
 
 [workspace]
 members = [".", "tools/dashboard"]

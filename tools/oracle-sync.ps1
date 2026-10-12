@@ -4,8 +4,8 @@
 # testing\datagen\<Name>\status.txt totals every collected segment for the dashboard and training.
 # Usage: .\tools\oracle-sync.ps1            (loop every 10 minutes; run hidden in the background)
 #        .\tools\oracle-sync.ps1 -Once
-# -Name: the data folder; it changes with each data generation (oracle-gen2 = v0.8's network, oracle-gen3 = v1.3's).
-param([switch]$Once, [int]$IntervalSeconds = 600, [string]$Name = 'oracle-gen3')
+# -Name: the data folder; it changes with each data generation (oracle-gen2 = v0.8's network, oracle-gen3 = v1.3's, oracle-gen4 = v1.7m's).
+param([switch]$Once, [int]$IntervalSeconds = 600, [string]$Name = 'oracle-gen4')
 
 . "$PSScriptRoot\paths.ps1"
 if (-not $OracleHost) { throw 'Set $OracleHost and $OracleKey in tools\engines.local.ps1' }

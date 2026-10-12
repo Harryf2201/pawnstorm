@@ -7,6 +7,7 @@ pub mod datagen;
 pub mod eval;
 pub mod nnue;
 pub mod search;
+pub mod tb;
 pub mod tt;
 pub mod types;
 pub mod uci;
