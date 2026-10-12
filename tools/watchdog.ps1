@@ -26,7 +26,9 @@ $Limits = @{
     disk_free_gb = @{ warn = 25; crit = 10; ok = 30; low = $true }
 }
 $Labels = @{ cpu_temp = 'CPU temperature'; gpu_temp = 'GPU temperature'; gpu_mem_temp = 'GPU memory temperature'; ssd_temp = 'SSD temperature'; ram_free_gb = 'free RAM'; disk_free_gb = 'free disk space' }
-$Units = @{ cpu_temp = '°C'; gpu_temp = '°C'; gpu_mem_temp = '°C'; ssd_temp = '°C'; ram_free_gb = ' GB'; disk_free_gb = ' GB' }
+# (The degree sign is built in code: Windows PowerShell reads this BOM-less file as ANSI.)
+$deg = "$([char]0xB0)C"
+$Units = @{ cpu_temp = $deg; gpu_temp = $deg; gpu_mem_temp = $deg; ssd_temp = $deg; ram_free_gb = ' GB'; disk_free_gb = ' GB' }
 
 Add-Type @'
 using System;

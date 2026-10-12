@@ -1173,7 +1173,8 @@ impl App {
             .collect();
         fields.push(format!("\"history\":[{}]", rows.join(",")));
         let events = std::fs::read_to_string(dir.join("events.log")).unwrap_or_default();
-        let ev: Vec<String> = events.lines().rev().take(12).map(js).collect();
+        // (Older lines were written as UTF-8 read back as ANSI, so "°" shows up as "Â°".)
+        let ev: Vec<String> = events.lines().rev().take(12).map(|l| js(&l.replace("Â°", "°"))).collect();
         fields.push(format!("\"events\":[{}]", ev.join(",")));
         format!("{{{}}}", fields.join(","))
     }
@@ -1754,6 +1755,34 @@ impl App {
         }
         if path == "/api/schedule" {
             return ("200 OK", self.jobs(), "application/json");
+        }
+        // SPSA search tuning (tools\spsa.ps1): its state, the parameter list and the per-iteration results.
+        if path == "/api/spsa" {
+            let dir = self.root.join("spsa");
+            let read = |f: &str| std::fs::read_to_string(dir.join(f)).ok().map(|s| s.trim_start_matches('\u{feff}').trim().to_string());
+            let (Some(state), Some(params)) = (read("state.json"), read("params.json")) else {
+                return ("200 OK", "null".into(), "application/json");
+            };
+            let history: Vec<String> = read("history.csv")
+                .unwrap_or_default()
+                .lines()
+                .skip(1)
+                .filter_map(|l| {
+                    let f: Vec<&str> = l.split(',').take(5).collect();
+                    (f.len() == 5 && f.iter().all(|x| x.parse::<f64>().is_ok())).then(|| format!("[{}]", f.join(",")))
+                })
+                .collect();
+            let updated = mtime(&dir.join("state.json"));
+            return (
+                "200 OK",
+                format!(
+                    "{{\"state\":{state},\"params\":{params},\"history\":[{}],\"updated\":{updated},\"now\":{},\"stop_requested\":{}}}",
+                    history.join(","),
+                    now(),
+                    dir.join("STOP").exists()
+                ),
+                "application/json",
+            );
         }
         if path == "/api/datagen" {
             return ("200 OK", self.datagen(), "application/json");

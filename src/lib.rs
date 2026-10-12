@@ -6,6 +6,7 @@ pub mod board;
 pub mod datagen;
 pub mod eval;
 pub mod nnue;
+pub mod params;
 pub mod search;
 pub mod tb;
 pub mod tt;

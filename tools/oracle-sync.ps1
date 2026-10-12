@@ -16,22 +16,43 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 $ssh = @('-i', $OracleKey, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4')
 function Log($m) { Add-Content $events "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" -Encoding utf8 }
 
+# Runs ssh/scp with stdin closed and a hard time limit. (Started from a hidden window, Windows'
+# ssh could otherwise wait on its stdin after the remote command had finished, and the
+# keepalives kept that connection open: the sync hung for hours.)
+# Returns @{ Ok = exited with 0 in time; Out = stdout lines }.
+function Invoke-Remote([string]$exe, [string[]]$arguments, [int]$TimeoutSeconds = 120) {
+    $psi = [Diagnostics.ProcessStartInfo]::new("$env:WINDIR\System32\OpenSSH\$exe.exe")
+    $psi.Arguments = ($arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $p = [Diagnostics.Process]::Start($psi)
+    $p.StandardInput.Close()
+    $out = $p.StandardOutput.ReadToEndAsync()
+    if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $p.Kill() } catch {}
+        Log "$exe timed out after ${TimeoutSeconds}s: $($arguments[-1])"
+        return @{ Ok = $false; Out = @() }
+    }
+    return @{ Ok = ($p.ExitCode -eq 0); Out = @($out.Result -split "`r?`n" | Where-Object { $_ }) }
+}
+function Remote([string]$cmd) { (Invoke-Remote 'ssh' ($ssh + $OracleHost + $cmd)).Out }
+
 function Sync-Once {
-    $segs = @(ssh @ssh $OracleHost 'ls -1 ~/outbox 2>/dev/null' | Where-Object { $_ -match '^seg-\d{8}-\d{6}$' })
+    $segs = @(Remote 'ls -1 ~/outbox 2>/dev/null' | Where-Object { $_ -match '^seg-\d{8}-\d{6}$' })
     foreach ($s in $segs) {
         $tmp = "$dir\_dl_$s"
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-        scp @ssh -q -r "${OracleHost}:outbox/$s" $tmp
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$tmp\status.txt")) { Log "copy of $s failed"; continue }
+        $copied = Invoke-Remote 'scp' ($ssh + '-q', '-r', "${OracleHost}:outbox/$s", $tmp) 900
+        if (-not $copied.Ok -or -not (Test-Path "$tmp\status.txt")) { Log "copy of $s failed"; continue }
         $tag = $s -replace '^seg-', ''
         foreach ($f in Get-ChildItem "$tmp\data_*.txt.gz") { Move-Item -Force $f.FullName "$dir\data_$($tag)_$($f.Name.Substring(5))" }
         Move-Item -Force "$tmp\status.txt" "$dir\seg_$tag.status"
         Remove-Item -Recurse -Force $tmp
-        ssh @ssh $OracleHost "rm -rf ~/outbox/$s" | Out-Null
+        $null = Remote "rm -rf ~/outbox/$s"
         Log "collected $s"
     }
     # The segment still being generated, for a live count.
-    $live = @(ssh @ssh $OracleHost 'cat ~/work/seg-*/status.txt 2>/dev/null')
+    $live = @(Remote 'cat ~/work/seg-*/status.txt 2>/dev/null')
     $sum = @{ positions = 0; games = 0; white_wins = 0; draws = 0; black_wins = 0; plies = 0; nodes = 0 }
     $first = 0
     foreach ($st in Get-ChildItem "$dir\seg_*.status") {
