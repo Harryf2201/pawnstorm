@@ -147,6 +147,9 @@ pub fn run() {
                 println!("option name Move Overhead type spin default 10 min 0 max 5000");
                 println!("option name EvalFile type string default <embedded>");
                 println!("option name SyzygyPath type string default <empty>");
+                for (name, def, min, max) in crate::params::DEFS {
+                    println!("option name {name} type spin default {def} min {min} max {max}");
+                }
                 println!("uciok");
             }
             "isready" => println!("readyok"),
@@ -178,7 +181,12 @@ pub fn run() {
                         let (n, max) = crate::tb::init(&path);
                         println!("info string syzygy: {n} tables, up to {max} pieces");
                     }
-                    _ => {}
+                    _ => {
+                        e.wait();
+                        if let Ok(v) = value.parse::<i32>() {
+                            crate::params::set(&name, v);
+                        }
+                    }
                 }
             }
             "position" => {
