@@ -1348,7 +1348,20 @@ function renderSchedule() {
 }
 
 // ---- Lichess bot (/api/lichess): tools\lichess-sync.ps1 reads the bot account every 2 minutes ----
-let lichess = null;
+let lichess = null, lichessLive = null;
+/// The bot's game in progress (/api/lichess/live, rebuilt from its log): board and engine eval.
+function lichessLiveHtml(g) {
+  const whitePct = 50 + 50 * (2 / (1 + Math.exp(-g.cp / 250)) - 1);
+  const player = (name) => `<div class="player ${g.thinking === name ? 'to' : ''}"><span class="n">${g.thinking === name ? '<span class="dot running"></span>' : ''}${esc(name)}</span></div>`;
+  return `<h4>Playing now · <a href="${esc(g.url)}" target="_blank" rel="noopener">watch on Lichess</a></h4>
+    <div class="games"><div class="game">
+    ${player(g.black)}
+    <div class="bw"><div class="evalbar"><div class="b" style="height:${100 - whitePct}%"></div><div class="w"></div></div>${boardHtml(g.fen, g.last)}</div>
+    ${player(g.white)}
+    <div class="ginfo"><span>Move <b>${g.move}</b></span><span>Eval <b>${esc(g.eval)}</b></span><span>Depth <b>${g.depth || '–'}</b></span></div>
+    </div></div>
+    <div class="sub" style="font-size:12px">Eval from White's side, from Pawnstorm's own search on its last move (8 threads). Updates every couple of seconds.</div>`;
+}
 function renderLichess() {
   if (!lichess) return '';
   const l = lichess, age = Date.now() / 1000 - l.updated;
@@ -1371,6 +1384,7 @@ function renderLichess() {
     <div class="cards">${ratings}
       <div class="card"><div class="k">Last ${total} games</div><div class="v">${w}–${d}–${lo}</div><div class="d">win–draw–loss · score ${score(done)}${rated.length ? ` · rated ${rw}–${rd}–${rl}` : ''}</div></div>
     </div>
+    ${lichessLive ? lichessLiveHtml(lichessLive) : ''}
     ${rows ? `<h4>Recent games</h4><div class="cl-wrap"><table class="cl"><tbody>${rows}</tbody></table></div>` : ''}
     <div class="sub" style="font-size:12px;margin-top:8px">${l.playing ? l.playing + ' game in progress · ' : ''}${live ? 'updated ' + hm(l.updated) : 'status is stale (the sync script is not running)'} · <a href="https://lichess.org/@/${esc(l.username)}" target="_blank" rel="noopener">profile</a></div>`;
   const sum = (l.perfs.length ? l.perfs.map(p => p.rating).join(' / ') + ' · ' : '') + `${w}–${d}–${lo}` + (l.playing ? ' · playing now' : '');
@@ -1540,9 +1554,9 @@ async function poll() {
   const j = async u => { try { return await (await fetch(u)).json(); } catch (e) { return undefined; } };
   const n = pollN++;
   try {
-    const [h, l, t, s, g, r, rt, a, cat, pr, sp, li] = await Promise.all([
+    const [h, l, t, s, g, r, rt, a, cat, pr, sp, li, lv] = await Promise.all([
       j('/api/health'), j('/api/lab'), j('/api/training'), j('/api/schedule'), j('/api/datagen'), j('/api/runs'),
-      j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'), j('/api/prepare'), j('/api/spsa'), j('/api/lichess'),
+      j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'), j('/api/prepare'), j('/api/spsa'), j('/api/lichess'), j('/api/lichess/live'),
     ]);
     if (r === undefined) throw new Error('unreachable');
     health = h ?? null; lab = l ?? null; schedule = s ?? null;
@@ -1557,6 +1571,7 @@ async function poll() {
     if (rt) ratings = rt;
     spsa = sp ?? null;
     lichess = li ?? null;
+    lichessLive = lv ?? null;
     if (a) ach = a;
     const champ = latestChampionship();
     const want = runs.filter(x => x.status === 'running' || isOpen('run:' + x.id) || x === champ).map(x => x.id);
