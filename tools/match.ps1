@@ -4,6 +4,7 @@
 #   sf:2400            Stockfish limited to UCI_Elo 2400 (used as a rating anchor)
 #   stockfish, dragon, rubichess, plentychess   full-strength engines in Downloads
 #   <name> with <name>.nnue + <name>.runner   that network on the build named in .runner
+#   (any of ours may also have <name>.options: extra UCI options, one Name=Value per line)
 #   anything else      testing\engines\<name>.exe (e.g. pawnstorm-v0.1)
 #
 # Examples:
@@ -56,6 +57,11 @@ foreach ($spec in $Engines) {
         if (-not (Test-Path $path)) { throw "Engine not found: $path" }
         $n = $spec
         $fcArgs += '-engine', "cmd=$path", "name=$n"
+    }
+    # Extra UCI options for one of our engines: <spec>.options, one "Name=Value" per line
+    # (e.g. SyzygyPath=C:\...\syzygy).
+    if (Test-Path "$Root\engines\$spec.options") {
+        foreach ($o in Get-Content "$Root\engines\$spec.options" | Where-Object { $_ -match '=' }) { $fcArgs += "option.$($o.Trim())" }
     }
     $names += $n
 }
