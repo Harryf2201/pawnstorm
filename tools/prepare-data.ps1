@@ -41,8 +41,9 @@ if (Test-Path $bash) {
     Remove-Item $script
     "Snapshot: $count positions"
     & $Utils convert --from text --input $text --output $raw
+    Remove-Item $text   # free the space before shuffling (the text is ~2.5x the binary)
     & $Utils shuffle --input $raw --mem-used-mb $ShuffleMemMb --output $final
-    Remove-Item $text, $raw
+    Remove-Item $raw
     "Ready: $final ($([math]::Round((Get-Item $final).Length / 1MB)) MB)"
     return
 }
