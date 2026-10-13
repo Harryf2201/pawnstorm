@@ -589,6 +589,7 @@ impl Searcher {
 
         let excluded = self.stack[ply].excluded;
         let tt_entry = if excluded.is_null() { self.tt.probe(b.hash) } else { None };
+        let tt_pv = pv_node || tt_entry.is_some_and(|e| e.pv);
         let tt_move = tt_entry.map_or(Move::NULL, |e| e.mv);
         if let Some(e) = tt_entry {
             let s = score_from_tt(e.score, ply);
@@ -615,7 +616,7 @@ impl Searcher {
                     -1 => -TB_WIN + ply as i32,
                     _ => 0,
                 };
-                self.tt.store(b.hash, Move::NULL, s, NO_EVAL, (depth + 6).min(MAX_PLY as i32 - 1), BOUND_EXACT);
+                self.tt.store(b.hash, Move::NULL, s, NO_EVAL, (depth + 6).min(MAX_PLY as i32 - 1), BOUND_EXACT, tt_pv);
                 return s;
             }
         }
@@ -725,7 +726,7 @@ impl Searcher {
                         return 0;
                     }
                     if s >= pc_beta && s.abs() < MATE_BOUND {
-                        self.tt.store(b.hash, mv, score_to_tt(s, ply), raw_eval, depth - 3, BOUND_LOWER);
+                        self.tt.store(b.hash, mv, score_to_tt(s, ply), raw_eval, depth - 3, BOUND_LOWER, tt_pv);
                         return s;
                     }
                 }
@@ -827,6 +828,8 @@ impl Searcher {
                 if depth >= 3 && legal > 1 + root as i32 + pv_node as i32 && (is_quiet || scores[i] < 0) {
                     r = self.lmr[depth.min(63) as usize][legal.min(63) as usize];
                     r += !pv_node as i32;
+                    // Positions that were once on a principal variation are searched less aggressively.
+                    r -= (tt_pv && !pv_node) as i32 * p(P::TtPvLmr);
                     r += cut_node as i32;
                     r += !improving as i32;
                     r -= nb.in_check() as i32;
@@ -927,7 +930,7 @@ impl Searcher {
             {
                 self.update_corr(b, raw_eval, best, depth, ply);
             }
-            self.tt.store(b.hash, best_move, score_to_tt(best, ply), raw_eval, depth, bound);
+            self.tt.store(b.hash, best_move, score_to_tt(best, ply), raw_eval, depth, bound, tt_pv);
         }
         best
     }
@@ -1025,7 +1028,7 @@ impl Searcher {
             return -MATE + ply as i32;
         }
         let bound = if best >= beta { BOUND_LOWER } else { BOUND_UPPER };
-        self.tt.store(b.hash, best_move, score_to_tt(best, ply), raw_eval, 0, bound);
+        self.tt.store(b.hash, best_move, score_to_tt(best, ply), raw_eval, 0, bound, pv_node || tt_entry.is_some_and(|e| e.pv));
         best
     }
 }

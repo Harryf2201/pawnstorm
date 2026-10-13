@@ -40,6 +40,7 @@ params! {
     CorrPawnW = 256, 64, 512;
     CorrNonPawnW = 96, 0, 384;
     CorrContW = 96, 0, 384;
+    TtPvLmr = 1, 0, 2;
 }
 
 static mut GENERATION: u32 = 0;

@@ -16,6 +16,8 @@ pub struct TTData {
     pub eval: i32,
     pub depth: i32,
     pub bound: u8,
+    /// The position was on a principal variation when stored (or earlier).
+    pub pv: bool,
 }
 
 #[derive(Default)]
@@ -29,14 +31,15 @@ pub struct TT {
     age: AtomicU8,
 }
 
-// data layout: mv 0-15 | score 16-31 | eval 32-47 | depth 48-55 | bound 56-57 | age 58-63
-fn pack(mv: Move, score: i32, eval: i32, depth: i32, bound: u8, age: u8) -> u64 {
+// data layout: mv 0-15 | score 16-31 | eval 32-47 | depth 48-55 | bound 56-57 | age 58-62 | pv 63
+fn pack(mv: Move, score: i32, eval: i32, depth: i32, bound: u8, age: u8, pv: bool) -> u64 {
     mv.0 as u64
         | ((score as i16 as u16 as u64) << 16)
         | ((eval as i16 as u16 as u64) << 32)
         | ((depth.clamp(0, 255) as u64) << 48)
         | ((bound as u64) << 56)
-        | (((age & 63) as u64) << 58)
+        | (((age & 31) as u64) << 58)
+        | ((pv as u64) << 63)
 }
 
 impl TT {
@@ -61,7 +64,7 @@ impl TT {
     }
 
     pub fn new_search(&self) {
-        self.age.store(self.age.load(Relaxed).wrapping_add(1) & 63, Relaxed);
+        self.age.store(self.age.load(Relaxed).wrapping_add(1) & 31, Relaxed);
     }
 
     pub fn prefetch(&self, key: u64) {
@@ -88,10 +91,11 @@ impl TT {
             eval: (data >> 32) as u16 as i16 as i32,
             depth: ((data >> 48) & 0xFF) as i32,
             bound,
+            pv: data >> 63 != 0,
         })
     }
 
-    pub fn store(&self, key: u64, mut mv: Move, score: i32, eval: i32, depth: i32, bound: u8) {
+    pub fn store(&self, key: u64, mut mv: Move, score: i32, eval: i32, depth: i32, bound: u8, pv: bool) {
         let e = &self.entries[self.index(key)];
         let old_data = e.data.load(Relaxed);
         let same = e.key.load(Relaxed) ^ old_data == key;
@@ -100,9 +104,9 @@ impl TT {
             mv = Move(old_data as u16);
         }
         let old_depth = ((old_data >> 48) & 0xFF) as i32;
-        let old_age = ((old_data >> 58) & 63) as u8;
+        let old_age = ((old_data >> 58) & 31) as u8;
         if !same || bound == BOUND_EXACT || depth + 4 > old_depth || old_age != age {
-            let data = pack(mv, score, eval, depth, bound, age);
+            let data = pack(mv, score, eval, depth, bound, age, pv);
             e.data.store(data, Relaxed);
             e.key.store(key ^ data, Relaxed);
         }
@@ -116,7 +120,7 @@ impl TT {
             .take(1000)
             .filter(|e| {
                 let d = e.data.load(Relaxed);
-                (d >> 56) & 3 != 0 && ((d >> 58) & 63) as u8 == age
+                (d >> 56) & 3 != 0 && ((d >> 58) & 31) as u8 == age
             })
             .count()
     }
