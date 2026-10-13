@@ -68,6 +68,10 @@ pub struct Searcher {
     /// Correction history: per side to move and pawn structure, how far the static eval has
     /// tended to be from the search result (in 1/CORR_GRAIN pawns-of-centipawns).
     corr: Box<[[i32; CORR_SIZE]; 2]>,
+    /// The same, keyed by each color's non-pawn pieces (index: side to move, piece color).
+    np_corr: Box<[[[i32; CORR_SIZE]; 2]; 2]>,
+    /// The same, keyed by the last two moves (continuation correction).
+    cont_corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// NNUE accumulators per ply.
     acc: Vec<AccPair>,
     /// Nodes spent below each root move (from, to) in this search, for time management.
@@ -90,6 +94,20 @@ const CORR_SIZE: usize = 16384;
 const CORR_GRAIN: i32 = 256;
 const CORR_WEIGHT_SCALE: i32 = 256;
 const CORR_MAX: i32 = CORR_GRAIN * 32;
+
+/// Hash of one color's non-pawn pieces (type and square), for the non-pawn correction history.
+#[inline(always)]
+fn non_pawn_key(b: &Board, c: usize) -> usize {
+    let mut h = 0x2545F4914F6CDD1Du64.wrapping_mul(c as u64 + 1);
+    for pt in [KNIGHT, BISHOP, ROOK, QUEEN, KING] {
+        let mut x = (b.pieces[pt] & b.colors[c]) ^ (pt as u64).wrapping_mul(0x9E3779B97F4A7C15);
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51afd7ed558ccd);
+        x ^= x >> 33;
+        h = (h ^ x).wrapping_mul(0xc4ceb9fe1a85ec53).rotate_left(23);
+    }
+    (h ^ (h >> 29)) as usize % CORR_SIZE
+}
 
 /// Hash of the pawn structure (both colors), for the correction history.
 #[inline(always)]
@@ -172,6 +190,8 @@ impl Searcher {
             lmr,
             lmr_gen: generation(),
             corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
+            np_corr: vec![[[0i32; CORR_SIZE]; 2]; 2].into_boxed_slice().try_into().unwrap(),
+            cont_corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             acc: vec![[Accumulator { vals: [0; nnue::HIDDEN] }; 2]; MAX_PLY + 8],
             root_nodes: Box::new([[0; 64]; 64]),
             clock_tm: false,
@@ -192,23 +212,46 @@ impl Searcher {
         self.cont1.fill(0);
         self.cont2.fill(0);
         self.killers = [[Move::NULL; 2]; MAX_PLY + 2];
-        for side in self.corr.iter_mut() {
+        for side in self.corr.iter_mut().chain(self.cont_corr.iter_mut()) {
+            side.fill(0);
+        }
+        for side in self.np_corr.iter_mut().flatten() {
             side.fill(0);
         }
     }
 
-    /// The static eval adjusted by the correction history.
+    /// Index into the continuation correction table for the position at `ply`, if it has two previous moves.
     #[inline(always)]
-    fn corrected(&self, b: &Board, raw: i32) -> i32 {
-        (raw + self.corr[b.stm][pawn_key(b)] / CORR_GRAIN).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+    fn cont_key(&self, ply: usize) -> Option<usize> {
+        let (c1, c2) = (self.prev_cont(ply, 1), self.prev_cont(ply, 2));
+        (c1 != NO_CONT && c2 != NO_CONT).then(|| (c2 * 768 + c1) % CORR_SIZE)
     }
 
-    /// Moves the correction for this pawn structure towards (search score - raw static eval).
-    fn update_corr(&mut self, b: &Board, raw: i32, score: i32, depth: i32) {
-        let e = &mut self.corr[b.stm][pawn_key(b)];
+    /// The static eval adjusted by the correction histories (pawns, each side's other pieces, last moves),
+    /// each weighted by a tunable parameter (256 = full weight).
+    #[inline(always)]
+    fn corrected(&self, b: &Board, raw: i32, ply: usize) -> i32 {
+        let s = b.stm;
+        let mut c = self.corr[s][pawn_key(b)] * p(P::CorrPawnW)
+            + (self.np_corr[s][WHITE][non_pawn_key(b, WHITE)] + self.np_corr[s][BLACK][non_pawn_key(b, BLACK)]) * p(P::CorrNonPawnW);
+        if let Some(k) = self.cont_key(ply) {
+            c += self.cont_corr[s][k] * p(P::CorrContW);
+        }
+        (raw + c / (CORR_GRAIN * 256)).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+    }
+
+    /// Moves every correction for this position towards (search score - raw static eval).
+    fn update_corr(&mut self, b: &Board, raw: i32, score: i32, depth: i32, ply: usize) {
         let diff = (score - raw) * CORR_GRAIN;
         let w = (depth + 1).min(16);
-        *e = ((*e * (CORR_WEIGHT_SCALE - w) + diff * w) / CORR_WEIGHT_SCALE).clamp(-CORR_MAX, CORR_MAX);
+        let upd = |e: &mut i32| *e = ((*e * (CORR_WEIGHT_SCALE - w) + diff * w) / CORR_WEIGHT_SCALE).clamp(-CORR_MAX, CORR_MAX);
+        let s = b.stm;
+        upd(&mut self.corr[s][pawn_key(b)]);
+        upd(&mut self.np_corr[s][WHITE][non_pawn_key(b, WHITE)]);
+        upd(&mut self.np_corr[s][BLACK][non_pawn_key(b, BLACK)]);
+        if let Some(k) = self.cont_key(ply) {
+            upd(&mut self.cont_corr[s][k]);
+        }
     }
 
     fn elapsed_ms(&self) -> u64 {
@@ -559,7 +602,7 @@ impl Searcher {
                 Some(e) if e.eval > -MATE_BOUND => e.eval,
                 _ => self.eval(b, ply),
             };
-            static_eval = self.corrected(b, raw_eval);
+            static_eval = self.corrected(b, raw_eval, ply);
             eval = static_eval;
             // A TT score is a better estimate than the static eval when its bound allows it.
             if let Some(e) = tt_entry {
@@ -846,7 +889,7 @@ impl Searcher {
                 && !(bound == BOUND_LOWER && best <= static_eval)
                 && !(bound == BOUND_UPPER && best >= static_eval)
             {
-                self.update_corr(b, raw_eval, best, depth);
+                self.update_corr(b, raw_eval, best, depth, ply);
             }
             self.tt.store(b.hash, best_move, score_to_tt(best, ply), raw_eval, depth, bound);
         }
@@ -891,7 +934,7 @@ impl Searcher {
                 Some(e) if e.eval > -MATE_BOUND => e.eval,
                 _ => self.eval(b, ply),
             };
-            best = self.corrected(b, raw_eval);
+            best = self.corrected(b, raw_eval, ply);
             if best >= beta {
                 return best;
             }
