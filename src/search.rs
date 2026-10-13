@@ -70,6 +70,8 @@ pub struct Searcher {
     corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// NNUE accumulators per ply.
     acc: Vec<AccPair>,
+    /// Per-thread accumulator cache for king-bucket changes.
+    acc_cache: nnue::AccCache,
     /// Nodes spent below each root move (from, to) in this search, for time management.
     root_nodes: Box<[[u64; 64]; 64]>,
     /// Whether the soft limit comes from a game clock (and may be stretched or shortened).
@@ -173,6 +175,7 @@ impl Searcher {
             lmr_gen: generation(),
             corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             acc: vec![[Accumulator { vals: [0; nnue::HIDDEN] }; 2]; MAX_PLY + 8],
+            acc_cache: nnue::AccCache::new(),
             root_nodes: Box::new([[0; 64]; 64]),
             clock_tm: false,
             start: Instant::now(),
@@ -269,7 +272,7 @@ impl Searcher {
     fn nnue_update(&mut self, b: &Board, after: &Board, mv: Move, ply: usize) {
         if nnue::active() {
             let (parent, child) = self.acc.split_at_mut(ply + 1);
-            nnue::update(b, after, mv, &parent[ply], &mut child[0]);
+            nnue::update(b, after, mv, &parent[ply], &mut child[0], &mut self.acc_cache);
         }
     }
 

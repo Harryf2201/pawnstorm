@@ -67,6 +67,13 @@ pub struct Network {
 
 static DEFAULT_NET: &[u8] = include_bytes!("../nets/default.bin");
 static mut NET: Option<&'static Network> = None;
+/// Bumped whenever a network is loaded, so accumulator caches know to start over.
+static NET_GEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn set_net(net: &'static Network) {
+    unsafe { NET = Some(net) };
+    NET_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
 
 fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
     if bytes.len() < NET_BYTES {
@@ -86,7 +93,7 @@ fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
 /// Loads the embedded network, if one was built in.
 pub fn init() {
     if let Ok(net) = from_bytes(DEFAULT_NET) {
-        unsafe { NET = Some(net) };
+        set_net(net);
     }
 }
 
@@ -94,7 +101,7 @@ pub fn init() {
 pub fn load_file(path: &str) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     let net = from_bytes(&bytes)?;
-    unsafe { NET = Some(net) };
+    set_net(net);
     Ok(())
 }
 
@@ -148,10 +155,72 @@ pub fn refresh(b: &Board, acc: &mut AccPair) {
     }
 }
 
+#[derive(Clone)]
+struct CacheEntry {
+    acc: Accumulator,
+    /// The pieces (color * 6 + type) the cached accumulator was built for.
+    bbs: [u64; 12],
+}
+
+/// Accumulator cache ("Finny table"), one entry per perspective, king bucket and mirror side.
+/// When a king move changes its bucket, the new accumulator is made from the cached one for that
+/// bucket by applying only the pieces that differ, instead of summing every piece from scratch.
+pub struct AccCache {
+    gen: u32,
+    e: Vec<CacheEntry>,
+}
+
+impl AccCache {
+    pub fn new() -> AccCache {
+        AccCache { gen: u32::MAX, e: vec![CacheEntry { acc: Accumulator { vals: [0; HIDDEN] }, bbs: [0; 12] }; 2 * INPUT_BUCKETS * 2] }
+    }
+
+    /// Makes `persp`'s accumulator for position `b` into `out`, via the cache.
+    fn refresh_one(&mut self, b: &Board, persp: usize, out: &mut Accumulator) {
+        let net = net();
+        let gen = NET_GEN.load(std::sync::atomic::Ordering::Relaxed);
+        if gen != self.gen {
+            for e in self.e.iter_mut() {
+                e.acc = net.feature_bias;
+                e.bbs = [0; 12];
+            }
+            self.gen = gen;
+        }
+        let kb = persp_bucket(b, persp);
+        let e = &mut self.e[(persp * INPUT_BUCKETS + kb.0) * 2 + (kb.1 != 0) as usize];
+        for pc in 0..12 {
+            let cur = b.pieces[pc % 6] & b.colors[pc / 6];
+            let (mut add, mut sub) = (cur & !e.bbs[pc], e.bbs[pc] & !cur);
+            while add != 0 {
+                let w = &net.feature_weights[feature(persp, kb, pc, add.trailing_zeros() as usize)].vals;
+                for (v, d) in e.acc.vals.iter_mut().zip(w) {
+                    *v += *d;
+                }
+                add &= add - 1;
+            }
+            while sub != 0 {
+                let w = &net.feature_weights[feature(persp, kb, pc, sub.trailing_zeros() as usize)].vals;
+                for (v, d) in e.acc.vals.iter_mut().zip(w) {
+                    *v -= *d;
+                }
+                sub &= sub - 1;
+            }
+            e.bbs[pc] = cur;
+        }
+        *out = e.acc;
+    }
+}
+
+impl Default for AccCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Computes the child's accumulators from the parent's for `mv` played in position `b`
 /// (`after` is the position after the move). A king move into another bucket, or across the
-/// d/e-file mirror line, changes every input of that side, so its accumulator is rebuilt.
-pub fn update(b: &Board, after: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
+/// d/e-file mirror line, changes every input of that side, so its accumulator is rebuilt (from `cache`).
+pub fn update(b: &Board, after: &Board, mv: Move, parent: &AccPair, child: &mut AccPair, cache: &mut AccCache) {
     let (from, to) = (mv.from(), mv.to());
     let us = b.stm;
     let moved = b.mailbox[from] as usize;
@@ -181,7 +250,7 @@ pub fn update(b: &Board, after: &Board, mv: Move, parent: &AccPair, child: &mut 
     for persp in 0..2 {
         let kb = persp_bucket(b, persp);
         if persp == us && moved % 6 == KING && persp_bucket(after, persp) != kb {
-            refresh_one(after, persp, &mut child[persp]);
+            cache.refresh_one(after, persp, &mut child[persp]);
             continue;
         }
         let add: [&[i16; HIDDEN]; 2] = [
@@ -283,7 +352,8 @@ mod tests {
             seed
         };
         let bytes: Vec<u8> = (0..NET_BYTES / 2).flat_map(|_| ((rand() % 101) as i16 - 50).to_le_bytes()).collect();
-        unsafe { NET = Some(from_bytes(&bytes).unwrap()) };
+        set_net(from_bytes(&bytes).unwrap());
+        let mut cache = AccCache::new();
 
         let fens = [
             crate::board::START_FEN,
@@ -307,7 +377,7 @@ mod tests {
                     let mut next = [Accumulator { vals: [0; HIDDEN] }; 2];
                     let mut after = b;
                     after.make_move(mv);
-                    update(&b, &after, mv, &acc, &mut next);
+                    update(&b, &after, mv, &acc, &mut next, &mut cache);
                     b = after;
                     let mut fresh = [Accumulator { vals: [0; HIDDEN] }; 2];
                     refresh(&b, &mut fresh);
