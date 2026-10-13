@@ -24,6 +24,8 @@ struct Engine {
     handle: Option<JoinHandle<(Box<Searcher>, Vec<Box<Searcher>>)>>,
     hash_mb: usize,
     overhead_ms: u64,
+    /// True from "go ponder" until "ponderhit" (shared with the main searcher).
+    ponder: Arc<AtomicBool>,
 }
 
 const MAX_THREADS: usize = 64;
@@ -51,6 +53,7 @@ impl Engine {
             handle: None,
             hash_mb: 16,
             overhead_ms: 10,
+            ponder: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -139,7 +142,9 @@ impl Engine {
             }
         }
         self.stop.store(false, Ordering::Relaxed);
+        self.ponder.store(tokens.contains(&"ponder"), Ordering::Relaxed);
         let mut searcher = self.searcher.take().unwrap();
+        searcher.ponder = self.ponder.clone();
         searcher.hashes.clone_from(&self.hashes);
         searcher.print = true;
         searcher.overhead_ms = self.overhead_ms;
@@ -170,7 +175,11 @@ impl Engine {
                     .collect();
                 let (mv, _) = searcher.search(&board, &limits);
                 stop.store(true, Ordering::Relaxed);
-                println!("bestmove {mv}");
+                if searcher.ponder_move.is_null() {
+                    println!("bestmove {mv}");
+                } else {
+                    println!("bestmove {mv} ponder {}", searcher.ponder_move);
+                }
                 let helpers = running.into_iter().map(|j| j.join().expect("helper thread panicked")).collect();
                 (searcher, helpers)
             })
@@ -193,6 +202,7 @@ pub fn run() {
                 println!("option name Hash type spin default 16 min 1 max 65536");
                 println!("option name Threads type spin default 1 min 1 max {MAX_THREADS}");
                 println!("option name Move Overhead type spin default 10 min 0 max 5000");
+                println!("option name Ponder type check default false");
                 println!("option name EvalFile type string default <embedded>");
                 println!("option name SyzygyPath type string default <empty>");
                 for (name, def, min, max) in crate::params::DEFS {
@@ -246,6 +256,8 @@ pub fn run() {
                 e.position(&tokens);
             }
             "go" => e.go(&tokens),
+            // The opponent played the expected move: the ponder search carries on as a normal timed search.
+            "ponderhit" => e.ponder.store(false, Ordering::Relaxed),
             "stop" => {
                 e.stop.store(true, Ordering::Relaxed);
                 e.wait();

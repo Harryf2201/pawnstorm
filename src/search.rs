@@ -88,6 +88,12 @@ pub struct Searcher {
     /// False for the extra Lazy-SMP threads: they search the same position to fill the shared
     /// hash table, while the main thread alone ages the table, manages time and picks the move.
     pub main_thread: bool,
+    /// Set while pondering (thinking on the opponent's time): the clock is ignored until "ponderhit"
+    /// clears it, and the time budget then counts from that moment.
+    pub ponder: Arc<AtomicBool>,
+    pondering: bool,
+    /// The expected reply to the best move (second PV move), for "bestmove ... ponder ...".
+    pub ponder_move: Move,
 }
 
 const CORR_SIZE: usize = 16384;
@@ -203,6 +209,9 @@ impl Searcher {
             print: true,
             main_thread: true,
             overhead_ms: 10,
+            ponder: Arc::new(AtomicBool::new(false)),
+            pondering: false,
+            ponder_move: Move::NULL,
         }
     }
 
@@ -279,6 +288,16 @@ impl Searcher {
     }
 
     fn check_time(&mut self) {
+        if self.pondering && !self.ponder.load(Ordering::Relaxed) {
+            self.pondering = false;
+            self.start = Instant::now();
+        }
+        if self.pondering {
+            if self.stop.load(Ordering::Relaxed) {
+                self.stopped = true;
+            }
+            return;
+        }
         if self.stop.load(Ordering::Relaxed)
             || self.nodes >= self.node_limit
             || (self.hard_ms != u64::MAX && self.elapsed_ms() >= self.hard_ms)
@@ -416,6 +435,8 @@ impl Searcher {
         self.stopped = false;
         self.seldepth = 0;
         self.setup_time(limits, board.stm);
+        self.pondering = self.main_thread && self.ponder.load(Ordering::Relaxed);
+        self.ponder_move = Move::NULL;
         if self.main_thread {
             self.tt.new_search();
         }
@@ -444,7 +465,7 @@ impl Searcher {
             if self.print {
                 println!("info depth 1 seldepth 1 score {} nodes 0 tbhits 1 time 0 pv {}", format_score(score), mv.to_uci());
             }
-            while limits.infinite && !self.stop.load(Ordering::Relaxed) {
+            while (limits.infinite || (self.pondering && self.ponder.load(Ordering::Relaxed))) && !self.stop.load(Ordering::Relaxed) {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
             return (mv, score);
@@ -507,14 +528,29 @@ impl Searcher {
                 let stab = [1.5, 1.25, 1.1, 1.0, 0.95, 0.9, 0.85][stable];
                 soft = ((soft as f64 * (1.5 - frac) * 1.35 * stab) as u64).min(self.hard_ms);
             }
-            if self.elapsed_ms() >= soft || limits.soft_nodes.is_some_and(|n| self.nodes >= n) {
+            self.check_time();
+            if self.stopped {
+                break;
+            }
+            if (!self.pondering && self.elapsed_ms() >= soft) || limits.soft_nodes.is_some_and(|n| self.nodes >= n) {
                 break;
             }
         }
 
-        if limits.infinite {
-            while !self.stop.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_millis(1));
+        // An infinite search, or a ponder search that ran out of depth, waits for "stop" or "ponderhit".
+        while (limits.infinite || (self.pondering && self.ponder.load(Ordering::Relaxed))) && !self.stop.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        self.pondering = false;
+        if self.pv_len[0] >= 2 && self.pv[0][0] == best_move {
+            self.ponder_move = self.pv[0][1];
+        } else {
+            let mut nb = *board;
+            nb.make_move(best_move);
+            if let Some(e) = self.tt.probe(nb.hash) {
+                if !e.mv.is_null() && nb.legal_moves().contains(&e.mv) {
+                    self.ponder_move = e.mv;
+                }
             }
         }
         (best_move, best_score)
