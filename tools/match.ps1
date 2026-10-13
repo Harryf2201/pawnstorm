@@ -101,5 +101,7 @@ $meta = @("name=$Name", "type=$Type", "tc=$TC", "total=$total", "main=$($names[0
 
 # Run inside the run folder: fastchess writes a config.json into its working directory.
 $p = Start-Process -FilePath $Fastchess -ArgumentList $fcArgs -WorkingDirectory $dir -RedirectStandardOutput "$dir\output.txt" -RedirectStandardError "$dir\stderr.txt" -WindowStyle Hidden -PassThru
+# Below normal priority (the engines it starts inherit it), so the PC stays usable while it plays.
+try { $p.PriorityClass = 'BelowNormal' } catch {}
 Add-Content "$dir\meta.txt" "pid=$($p.Id)"
 "Started '$Name' ($total games max) -> $dir  [pid $($p.Id)]"

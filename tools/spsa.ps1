@@ -17,6 +17,8 @@ param(
 )
 . "$PSScriptRoot\paths.ps1"
 . "$PSScriptRoot\job-status.ps1"
+# Below normal priority (fastchess and the engines inherit it), so the PC stays usable.
+try { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' } catch {}
 $dir = "$LabRoot\spsa"
 New-Item -ItemType Directory -Force $dir | Out-Null
 $exe = "$LabRoot\engines\$Engine.exe"

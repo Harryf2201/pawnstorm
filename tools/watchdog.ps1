@@ -275,5 +275,9 @@ while ($true) {
         $keep = Get-Content $HistoryFile | Select-Object -Last 5000
         [IO.File]::WriteAllLines($HistoryFile, [string[]]$keep)
     }
+    # Engines and tournaments always run below normal priority, so the PC stays usable (videos,
+    # games) even with every thread busy; they just get less CPU while something else needs it.
+    Get-Process fastchess, pawnstorm*, stockfish* -ErrorAction SilentlyContinue | Where-Object { $_.PriorityClass -eq 'Normal' } |
+        ForEach-Object { try { $_.PriorityClass = 'BelowNormal' } catch {} }
     Start-Sleep $Interval
 }
