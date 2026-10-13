@@ -206,6 +206,40 @@ pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
     }
 }
 
+/// One side's layer-1 inputs: round(clip(a) * clip(b) / 512) for the two halves of its accumulator.
+#[cfg(target_feature = "avx2")]
+#[inline(always)]
+fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
+    use std::arch::x86_64::*;
+    const HALF: usize = HIDDEN / 2;
+    unsafe {
+        let zero = _mm256_setzero_si256();
+        let qa = _mm256_set1_epi16(QA as i16);
+        let clip = |p: *const i16| _mm256_min_epi16(_mm256_max_epi16(_mm256_load_si256(p as *const __m256i), zero), qa);
+        let mut i = 0;
+        while i < HALF {
+            // mulhrs((a << 6), b) = (a * b * 64 + 2^14) >> 15 = round(a * b / 512)
+            let r0 = _mm256_mulhrs_epi16(_mm256_slli_epi16::<6>(clip(v.as_ptr().add(i))), clip(v.as_ptr().add(i + HALF)));
+            let r1 = _mm256_mulhrs_epi16(_mm256_slli_epi16::<6>(clip(v.as_ptr().add(i + 16))), clip(v.as_ptr().add(i + HALF + 16)));
+            // packus interleaves the 128-bit lanes; the permute puts them back in order.
+            let packed = _mm256_permute4x64_epi64::<0b11_01_10_00>(_mm256_packus_epi16(r0, r1));
+            _mm256_storeu_si256(out.as_mut_ptr().add(i) as *mut __m256i, packed);
+            i += 32;
+        }
+    }
+}
+
+#[cfg(not(target_feature = "avx2"))]
+#[inline(always)]
+fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
+    const HALF: usize = HIDDEN / 2;
+    for i in 0..HALF {
+        let a = v[i].clamp(0, QA as i16) as u32;
+        let b = v[i + HALF].clamp(0, QA as i16) as u32;
+        out[i] = ((a * b + 256) >> 9) as u8;
+    }
+}
+
 /// Dot product of 0..=127 inputs with i8 weights (HIDDEN long).
 #[cfg(target_feature = "avx2")]
 #[inline(always)]
@@ -248,12 +282,7 @@ pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
     struct Inputs([u8; HIDDEN]);
     let mut x = Inputs([0; HIDDEN]);
     for (side, base) in [(stm, 0), (stm ^ 1, HALF)] {
-        let v = &acc[side].vals;
-        for i in 0..HALF {
-            let a = v[i].clamp(0, QA as i16) as u32;
-            let b = v[i + HALF].clamp(0, QA as i16) as u32;
-            x.0[base + i] = ((a * b + 256) >> 9) as u8;
-        }
+        pairwise_inputs(&acc[side].vals, &mut x.0[base..base + HALF]);
     }
     let q = unsafe { L1Q.unwrap_unchecked() };
     let mut h1 = net.l1b[bucket];
