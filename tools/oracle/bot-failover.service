@@ -1,0 +1,6 @@
+[Unit]
+Description=Start the server's Lichess bot if the account is offline
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/bot-failover.sh

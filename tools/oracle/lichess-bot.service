@@ -1,0 +1,11 @@
+[Unit]
+Description=Pawnstorm Lichess bot (started/stopped by tools/bot-host.ps1 and bot-failover.sh; not started at boot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/lichess-bot
+ExecStart=/home/ubuntu/lichess-bot/venv/bin/python lichess-bot.py --logfile bot.log
+Restart=on-failure
+RestartSec=30
