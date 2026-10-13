@@ -1,5 +1,6 @@
-//! NNUE evaluation: (768 -> HIDDEN)x2 -> OUTPUT_BUCKETS with SCReLU, as trained by bullet (see trainer/).
-//! With several output buckets, the output weights used depend on how many pieces are on the board.
+//! NNUE evaluation, multi-layer (trainer -Inputs ml): (768 -> HIDDEN, clipped ReLU, pairwise products of the
+//! two halves) x2 -> L1 -> L2 -> 1, every layer after the first chosen by material (OUTPUT_BUCKETS).
+//! The first layer is i16 (incrementally updated accumulators); the small layers run in f32.
 //!
 //! Each side has an accumulator (the first layer's output). Moves only change a few input
 //! features, so the search updates accumulators incrementally instead of recomputing them.
@@ -11,13 +12,15 @@ use crate::types::*;
 
 /// Must match the trainer's hidden size and bucket count (trainer args 6 and 7).
 pub const HIDDEN: usize = 1024;
-pub const OUTPUT_BUCKETS: usize = 1;
-const SCALE: i32 = 400;
+pub const OUTPUT_BUCKETS: usize = 8;
+const L1: usize = 16;
+const L2: usize = 32;
+const SCALE: f32 = 400.0;
 const QA: i32 = 255;
-const QB: i32 = 64;
 
 /// Size of bullet's quantised output (it may be padded to a multiple of 64).
-pub const NET_BYTES: usize = (768 * HIDDEN + HIDDEN + 2 * HIDDEN * OUTPUT_BUCKETS + OUTPUT_BUCKETS) * 2;
+pub const NET_BYTES: usize = (768 * HIDDEN + HIDDEN) * 2
+    + (HIDDEN * OUTPUT_BUCKETS * L1 + OUTPUT_BUCKETS * L1 + L1 * OUTPUT_BUCKETS * L2 + OUTPUT_BUCKETS * L2 + L2 * OUTPUT_BUCKETS + OUTPUT_BUCKETS) * 4;
 
 #[derive(Clone, Copy)]
 #[repr(C, align(64))]
@@ -29,13 +32,47 @@ pub struct Accumulator {
 pub struct Network {
     feature_weights: [Accumulator; 768],
     feature_bias: Accumulator,
-    /// One row of 2 * HIDDEN weights per bucket (bullet saves them transposed this way).
-    output_weights: [[i16; 2 * HIDDEN]; OUTPUT_BUCKETS],
-    output_bias: [i16; OUTPUT_BUCKETS],
+    // bullet's native (input-major) layout: for each input, the outputs of every bucket in a row.
+    l1w: [[[f32; L1]; OUTPUT_BUCKETS]; HIDDEN],
+    l1b: [[f32; L1]; OUTPUT_BUCKETS],
+    l2w: [[[f32; L2]; OUTPUT_BUCKETS]; L1],
+    l2b: [[f32; L2]; OUTPUT_BUCKETS],
+    l3w: [[f32; OUTPUT_BUCKETS]; L2],
+    l3b: [f32; OUTPUT_BUCKETS],
 }
 
 static DEFAULT_NET: &[u8] = include_bytes!("../nets/default.bin");
 static mut NET: Option<&'static Network> = None;
+
+/// Layer 1 quantised to i8 for speed (built from the f32 weights when a network loads), one row of HIDDEN
+/// weights per (bucket, output). `mul` turns the integer dot product back into the float pre-activation.
+struct L1Quant {
+    w: Vec<i8>,
+    /// Per (bucket, output) row.
+    mul: Vec<f32>,
+}
+static mut L1Q: Option<&'static L1Quant> = None;
+
+fn set_net(net: &'static Network) {
+    let mut w = vec![0i8; OUTPUT_BUCKETS * L1 * HIDDEN];
+    let mut mul = vec![0f32; OUTPUT_BUCKETS * L1];
+    for b in 0..OUTPUT_BUCKETS {
+        for o in 0..L1 {
+            // Each row gets its own scale, so small rows keep their precision.
+            let max = (0..HIDDEN).fold(0f32, |m, i| m.max(net.l1w[i][b][o].abs())).max(1e-6);
+            let scale = 127.0 / max;
+            for i in 0..HIDDEN {
+                w[(b * L1 + o) * HIDDEN + i] = (net.l1w[i][b][o] * scale).round() as i8;
+            }
+            // Inputs are round(a * b / 512) with a, b in 0..=255, i.e. x * 65025 / 512.
+            mul[b * L1 + o] = 512.0 / (65025.0 * scale);
+        }
+    }
+    unsafe {
+        L1Q = Some(Box::leak(Box::new(L1Quant { w, mul })));
+        NET = Some(net);
+    }
+}
 
 fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
     if bytes.len() < NET_BYTES {
@@ -55,7 +92,7 @@ fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
 /// Loads the embedded network, if one was built in.
 pub fn init() {
     if let Ok(net) = from_bytes(DEFAULT_NET) {
-        unsafe { NET = Some(net) };
+        set_net(net);
     }
 }
 
@@ -63,7 +100,7 @@ pub fn init() {
 pub fn load_file(path: &str) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     let net = from_bytes(&bytes)?;
-    unsafe { NET = Some(net) };
+    set_net(net);
     Ok(())
 }
 
@@ -169,26 +206,57 @@ pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
     }
 }
 
-/// AVX2 version: 16 lanes per step, clamp, (x * w) in 16 bits, then multiply-add by x into 32 bits.
+/// One side's layer-1 inputs: round(clip(a) * clip(b) / 512) for the two halves of its accumulator.
 #[cfg(target_feature = "avx2")]
 #[inline(always)]
-fn screlu_dot(acc: &[i16; HIDDEN], w: &[i16]) -> i32 {
+fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
     use std::arch::x86_64::*;
-    debug_assert!(w.len() >= HIDDEN);
+    const HALF: usize = HIDDEN / 2;
     unsafe {
         let zero = _mm256_setzero_si256();
         let qa = _mm256_set1_epi16(QA as i16);
+        let clip = |p: *const i16| _mm256_min_epi16(_mm256_max_epi16(_mm256_load_si256(p as *const __m256i), zero), qa);
+        let mut i = 0;
+        while i < HALF {
+            // mulhrs((a << 6), b) = (a * b * 64 + 2^14) >> 15 = round(a * b / 512)
+            let r0 = _mm256_mulhrs_epi16(_mm256_slli_epi16::<6>(clip(v.as_ptr().add(i))), clip(v.as_ptr().add(i + HALF)));
+            let r1 = _mm256_mulhrs_epi16(_mm256_slli_epi16::<6>(clip(v.as_ptr().add(i + 16))), clip(v.as_ptr().add(i + HALF + 16)));
+            // packus interleaves the 128-bit lanes; the permute puts them back in order.
+            let packed = _mm256_permute4x64_epi64::<0b11_01_10_00>(_mm256_packus_epi16(r0, r1));
+            _mm256_storeu_si256(out.as_mut_ptr().add(i) as *mut __m256i, packed);
+            i += 32;
+        }
+    }
+}
+
+#[cfg(not(target_feature = "avx2"))]
+#[inline(always)]
+fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
+    const HALF: usize = HIDDEN / 2;
+    for i in 0..HALF {
+        let a = v[i].clamp(0, QA as i16) as u32;
+        let b = v[i + HALF].clamp(0, QA as i16) as u32;
+        out[i] = ((a * b + 256) >> 9) as u8;
+    }
+}
+
+/// Dot product of 0..=127 inputs with i8 weights (HIDDEN long).
+#[cfg(target_feature = "avx2")]
+#[inline(always)]
+fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
+    use std::arch::x86_64::*;
+    unsafe {
+        let ones = _mm256_set1_epi16(1);
         let mut sum = _mm256_setzero_si256();
         let mut i = 0;
         while i < HIDDEN {
-            let x = _mm256_min_epi16(_mm256_max_epi16(_mm256_load_si256(acc.as_ptr().add(i) as *const __m256i), zero), qa);
+            let xv = _mm256_load_si256(x.as_ptr().add(i) as *const __m256i);
             let wv = _mm256_loadu_si256(w.as_ptr().add(i) as *const __m256i);
-            sum = _mm256_add_epi32(sum, _mm256_madd_epi16(_mm256_mullo_epi16(x, wv), x));
-            i += 16;
+            // u8 * i8 pairs summed into i16 (at most 2 * 127 * 127, no saturation), then into i32.
+            sum = _mm256_add_epi32(sum, _mm256_madd_epi16(_mm256_maddubs_epi16(xv, wv), ones));
+            i += 32;
         }
-        let lo = _mm256_castsi256_si128(sum);
-        let hi = _mm256_extracti128_si256::<1>(sum);
-        let s = _mm_add_epi32(lo, hi);
+        let s = _mm_add_epi32(_mm256_castsi256_si128(sum), _mm256_extracti128_si256::<1>(sum));
         let s = _mm_add_epi32(s, _mm_shuffle_epi32::<0b01_00_11_10>(s));
         let s = _mm_add_epi32(s, _mm_shuffle_epi32::<0b10_11_00_01>(s));
         _mm_cvtsi128_si32(s)
@@ -197,14 +265,8 @@ fn screlu_dot(acc: &[i16; HIDDEN], w: &[i16]) -> i32 {
 
 #[cfg(not(target_feature = "avx2"))]
 #[inline(always)]
-fn screlu_dot(acc: &[i16; HIDDEN], w: &[i16]) -> i32 {
-    let mut sum = 0i32;
-    for i in 0..HIDDEN {
-        let x = acc[i].clamp(0, QA as i16) as i32;
-        // (x * w) fits in i16 because |w| <= 127, so this maps onto vpmaddwd.
-        sum += ((x * w[i] as i32) as i16 as i32) * x;
-    }
-    sum
+fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
+    x.iter().zip(w).map(|(&a, &b)| a as i32 * b as i32).sum()
 }
 
 /// Evaluation in centipawns from the side to move's point of view.
@@ -213,11 +275,36 @@ pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
     let net = net();
     // Same rule as bullet's MaterialCount<N>: (pieces - 2) / ceil(32 / N).
     let bucket = ((pieces.saturating_sub(2)) as usize / 32usize.div_ceil(OUTPUT_BUCKETS)).min(OUTPUT_BUCKETS - 1);
-    let w = &net.output_weights[bucket];
-    let mut out = screlu_dot(&acc[stm].vals, &w[..HIDDEN]) + screlu_dot(&acc[stm ^ 1].vals, &w[HIDDEN..]);
-    out /= QA;
-    out += net.output_bias[bucket] as i32;
-    out * SCALE / (QA * QB)
+    const HALF: usize = HIDDEN / 2;
+    // Layer 1 in 8-bit integers: each side's clipped first-layer outputs, the first half times the second
+    // half (side to move first), scaled to 0..=127, dotted with the i8 weights of this bucket's 16 outputs.
+    #[repr(align(32))]
+    struct Inputs([u8; HIDDEN]);
+    let mut x = Inputs([0; HIDDEN]);
+    for (side, base) in [(stm, 0), (stm ^ 1, HALF)] {
+        pairwise_inputs(&acc[side].vals, &mut x.0[base..base + HALF]);
+    }
+    let q = unsafe { L1Q.unwrap_unchecked() };
+    let mut h1 = net.l1b[bucket];
+    for (o, h) in h1.iter_mut().enumerate() {
+        let row = &q.w[(bucket * L1 + o) * HIDDEN..(bucket * L1 + o + 1) * HIDDEN];
+        *h += dot_u8_i8(&x.0, row) as f32 * q.mul[bucket * L1 + o];
+    }
+    let mut h2 = net.l2b[bucket];
+    for (j, &h) in h1.iter().enumerate() {
+        let x = h.clamp(0.0, 1.0);
+        let x = x * x;
+        let w = &net.l2w[j][bucket];
+        for o in 0..L2 {
+            h2[o] += w[o] * x;
+        }
+    }
+    let mut out = net.l3b[bucket];
+    for (k, &h) in h2.iter().enumerate() {
+        let x = h.clamp(0.0, 1.0);
+        out += net.l3w[k][bucket] * x * x;
+    }
+    (out * SCALE) as i32
 }
 
 #[cfg(test)]
@@ -237,7 +324,7 @@ mod tests {
             seed
         };
         let bytes: Vec<u8> = (0..NET_BYTES / 2).flat_map(|_| ((rand() % 101) as i16 - 50).to_le_bytes()).collect();
-        unsafe { NET = Some(from_bytes(&bytes).unwrap()) };
+        set_net(from_bytes(&bytes).unwrap());
 
         let fens = [
             crate::board::START_FEN,
