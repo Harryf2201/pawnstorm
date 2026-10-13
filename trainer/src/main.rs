@@ -83,6 +83,51 @@ fn main() {
     println!("Architecture           : ({inputs} -> {hidden})x2 -> {buckets}");
 
     // target = wdl * game_result + (1 - wdl) * sigmoid(score / SCALE)
+    if inputs == "ml" {
+        // Multi-layer: (768 -> hidden, clipped ReLU, pairwise products of the two halves) x2 -> 16 -> 32 -> 1,
+        // each layer after the first picked by material (8 output buckets). The first layer is quantised
+        // to i16 like the single-layer nets; the small layers stay f32 in their native (input-major) layout.
+        assert_eq!(buckets, 8, "the multi-layer net is set up with 8 output buckets");
+        let mut trainer = ValueTrainerBuilder::default()
+            .dual_perspective()
+            .optimiser(AdamW)
+            .inputs(Chess768)
+            .output_buckets(MaterialCount::<8>)
+            .save_format(&[
+                SavedFormat::id("l0w").round().quantise::<i16>(QA),
+                SavedFormat::id("l0b").round().quantise::<i16>(QA),
+                SavedFormat::id("l1w"),
+                SavedFormat::id("l1b"),
+                SavedFormat::id("l2w"),
+                SavedFormat::id("l2b"),
+                SavedFormat::id("l3w"),
+                SavedFormat::id("l3b"),
+            ])
+            .loss_fn(|output, target| output.sigmoid().squared_error(target))
+            .build(|builder, stm_inputs, ntm_inputs, output_buckets| {
+                let l0 = builder.new_affine("l0", 768, hidden);
+                let l1 = builder.new_affine("l1", hidden, 8 * 16);
+                let l2 = builder.new_affine("l2", 16, 8 * 32);
+                let l3 = builder.new_affine("l3", 32, 8);
+                let ft = |input, start, end| l0.slice(start, end).forward(input).crelu();
+                let stm_hidden = ft(stm_inputs, 0, hidden / 2) * ft(stm_inputs, hidden / 2, hidden);
+                let ntm_hidden = ft(ntm_inputs, 0, hidden / 2) * ft(ntm_inputs, hidden / 2, hidden);
+                let hl1 = stm_hidden.concat(ntm_hidden);
+                let hl2 = l1.forward(hl1).select(output_buckets).screlu();
+                let hl3 = l2.forward(hl2).select(output_buckets).screlu();
+                l3.forward(hl3).select(output_buckets)
+            });
+        // Reference evaluations for checking the engine's inference: trainer <id> <data> <checkpoint-dir> ... ml eval=<fen file>
+        if let Some(fens) = args.get(9).and_then(|a| a.strip_prefix("eval=")) {
+            trainer.load_from_checkpoint(&out);
+            for fen in std::fs::read_to_string(fens).expect("fen file").lines().filter(|l| !l.trim().is_empty()) {
+                println!("{:.2}\t{fen}", trainer.eval(fen.trim()));
+            }
+            return;
+        }
+        trainer.run(&schedule, &settings, &data_loader);
+        return;
+    }
     if inputs == "kb10" || inputs == "kb4" {
         assert_eq!(buckets, 1, "king buckets are only set up with a single output bucket");
         let layout = if inputs == "kb4" { KING_BUCKETS_4 } else { KING_BUCKETS };

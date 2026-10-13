@@ -8,7 +8,7 @@ param(
     [double]$Wdl = 0.4,
     [int]$Hidden = 512,
     [int]$Buckets = 1,
-    [ValidateSet('768', 'kb10', 'kb4')][string]$Inputs = '768',
+    [ValidateSet('768', 'kb10', 'kb4', 'ml')][string]$Inputs = '768',
     [switch]$Build
 )
 
