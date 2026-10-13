@@ -54,7 +54,8 @@ pub struct Searcher {
     seldepth: usize,
     /// Position hashes of the game so far plus the current search path (last = current position).
     pub hashes: Vec<u64>,
-    butterfly: Box<[[[i32; 64]; 64]; 2]>,
+    /// Quiet-move history by side, whether the from / to square is attacked by the opponent, from, to.
+    butterfly: Box<[[[[[i32; 64]; 64]; 2]; 2]; 2]>,
     capt_hist: Box<[[[i32; 6]; 64]; 12]>,
     cont1: Vec<i32>,
     cont2: Vec<i32>,
@@ -185,7 +186,7 @@ impl Searcher {
             nodes: 0,
             seldepth: 0,
             hashes: Vec::with_capacity(1024),
-            butterfly: Box::new([[[0; 64]; 64]; 2]),
+            butterfly: Box::new([[[[[0; 64]; 64]; 2]; 2]; 2]),
             capt_hist: Box::new([[[0; 6]; 64]; 12]),
             cont1: vec![0; 768 * 768],
             cont2: vec![0; 768 * 768],
@@ -216,7 +217,7 @@ impl Searcher {
     }
 
     pub fn clear(&mut self) {
-        *self.butterfly = [[[0; 64]; 64]; 2];
+        *self.butterfly = [[[[[0; 64]; 64]; 2]; 2]; 2];
         *self.capt_hist = [[[0; 6]; 64]; 12];
         self.cont1.fill(0);
         self.cont2.fill(0);
@@ -344,9 +345,10 @@ impl Searcher {
         }
     }
 
-    fn quiet_history(&self, b: &Board, mv: Move, ply: usize) -> i32 {
+    fn quiet_history(&self, b: &Board, mv: Move, ply: usize, threats: u64) -> i32 {
         let idx = b.mailbox[mv.from()] as usize * 64 + mv.to();
-        let mut s = self.butterfly[b.stm][mv.from()][mv.to()];
+        let (tf, tt) = ((threats >> mv.from()) as usize & 1, (threats >> mv.to()) as usize & 1);
+        let mut s = self.butterfly[b.stm][tf][tt][mv.from()][mv.to()];
         let c1 = self.prev_cont(ply, 1);
         if c1 != NO_CONT {
             s += self.cont1[c1 * 768 + idx];
@@ -358,9 +360,10 @@ impl Searcher {
         s
     }
 
-    fn update_quiet(&mut self, b: &Board, mv: Move, ply: usize, bonus: i32) {
+    fn update_quiet(&mut self, b: &Board, mv: Move, ply: usize, bonus: i32, threats: u64) {
         let idx = b.mailbox[mv.from()] as usize * 64 + mv.to();
-        gravity(&mut self.butterfly[b.stm][mv.from()][mv.to()], bonus);
+        let (tf, tt) = ((threats >> mv.from()) as usize & 1, (threats >> mv.to()) as usize & 1);
+        gravity(&mut self.butterfly[b.stm][tf][tt][mv.from()][mv.to()], bonus);
         let c1 = self.prev_cont(ply, 1);
         if c1 != NO_CONT {
             gravity(&mut self.cont1[c1 * 768 + idx], bonus);
@@ -384,7 +387,7 @@ impl Searcher {
         &mut self.capt_hist[b.mailbox[mv.from()] as usize][mv.to()][victim]
     }
 
-    fn score_moves(&self, b: &Board, list: &MoveList, scores: &mut [i32; 256], tt_move: Move, ply: usize) {
+    fn score_moves(&self, b: &Board, list: &MoveList, scores: &mut [i32; 256], tt_move: Move, ply: usize, threats: u64) {
         for i in 0..list.len {
             let mv = list.moves[i];
             scores[i] = if mv == tt_move {
@@ -410,7 +413,7 @@ impl Searcher {
             } else if mv == self.killers[ply][1] {
                 2_000_000
             } else {
-                self.quiet_history(b, mv, ply)
+                self.quiet_history(b, mv, ply, threats)
             };
         }
     }
@@ -705,7 +708,7 @@ impl Searcher {
                 let mut list = MoveList::new();
                 b.gen_moves(&mut list, true);
                 let mut scores = [0i32; 256];
-                self.score_moves(b, &list, &mut scores, tt_move, ply);
+                self.score_moves(b, &list, &mut scores, tt_move, ply, 0);
                 for i in 0..list.len {
                     let mv = Self::pick(&mut list, &mut scores, i);
                     if !b.is_legal(mv) || !b.see(mv, pc_beta - static_eval) {
@@ -738,10 +741,11 @@ impl Searcher {
             depth -= 1;
         }
 
+        let threats = b.threats(b.stm ^ 1);
         let mut list = MoveList::new();
         b.gen_moves(&mut list, false);
         let mut scores = [0i32; 256];
-        self.score_moves(b, &list, &mut scores, tt_move, ply);
+        self.score_moves(b, &list, &mut scores, tt_move, ply, threats);
 
         let mut best = -INF;
         let mut best_move = Move::NULL;
@@ -877,9 +881,9 @@ impl Searcher {
                                 self.killers[ply][1] = self.killers[ply][0];
                                 self.killers[ply][0] = mv;
                             }
-                            self.update_quiet(b, mv, ply, bonus);
+                            self.update_quiet(b, mv, ply, bonus, threats);
                             for &q in &quiets[..n_quiets] {
-                                self.update_quiet(b, q, ply, -bonus);
+                                self.update_quiet(b, q, ply, -bonus, threats);
                             }
                         } else if mv.is_capture() {
                             gravity(self.capt_entry(b, mv), bonus);
@@ -983,7 +987,7 @@ impl Searcher {
         let mut list = MoveList::new();
         b.gen_moves(&mut list, !in_check);
         let mut scores = [0i32; 256];
-        self.score_moves(b, &list, &mut scores, tt_move, ply);
+        self.score_moves(b, &list, &mut scores, tt_move, ply, if in_check { b.threats(b.stm ^ 1) } else { 0 });
 
         let mut best_move = Move::NULL;
         let mut legal = 0;
