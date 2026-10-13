@@ -584,6 +584,43 @@ struct Rated {
     vs: Vec<(String, f64, f64, f64, Option<f64>)>,
 }
 
+/// Raw records for the Compare panel: every pairing's [wins for a, draws, wins for b] over the runs
+/// started at or after `since` (unix seconds), engines shown by their version names, plus the
+/// Stockfish anchors (fixed Elo) seen in those runs.
+fn matchups(runs: &HashMap<String, RunState>, alias: &HashMap<String, String>, since: u64) -> String {
+    let show = |n: &str| alias.get(&engine_key(n)).cloned().unwrap_or_else(|| n.to_string());
+    let mut pairs: BTreeMap<(String, String), [u32; 3]> = BTreeMap::new();
+    let mut anchors: BTreeMap<String, f64> = BTreeMap::new();
+    let mut recent: BTreeMap<String, u64> = BTreeMap::new();
+    for r in runs.values().filter(|r| r.meta.created >= since) {
+        for (n, a) in &r.meta.anchors {
+            anchors.insert(show(n), *a);
+        }
+        for g in &r.games {
+            let s = match g.result.as_str() {
+                "1-0" => 0,
+                "1/2-1/2" => 1,
+                "0-1" => 2,
+                _ => continue,
+            };
+            let (w, b) = (show(&g.white), show(&g.black));
+            if w == b {
+                continue;
+            }
+            for n in [&w, &b] {
+                let t = recent.entry(n.clone()).or_insert(0);
+                *t = (*t).max(r.meta.created);
+            }
+            let (key, slot) = if w < b { ((w, b), s) } else { ((b, w), 2 - s) };
+            pairs.entry(key).or_insert([0; 3])[slot] += 1;
+        }
+    }
+    let rows: Vec<String> = pairs.iter().map(|((a, b), c)| format!("[{},{},{},{},{}]", js(a), js(b), c[0], c[1], c[2])).collect();
+    let anc: Vec<String> = anchors.iter().map(|(n, a)| format!("{}:{}", js(n), num(*a))).collect();
+    let rec: Vec<String> = recent.iter().map(|(n, t)| format!("{}:{}", js(n), t)).collect();
+    format!("{{\"pairs\":[{}],\"anchors\":{{{}}},\"recent\":{{{}}}}}", rows.join(","), anc.join(","), rec.join(","))
+}
+
 /// One joint maximum-likelihood fit over every game in every run. Anchor engines (Elo-limited
 /// Stockfish) keep their fixed ratings; everyone else is solved together, so new games against a
 /// version refine its rating retroactively and version-vs-version games count for both sides.
@@ -1855,6 +1892,12 @@ impl App {
                 })
                 .collect();
             return ("200 OK", format!("[{}]", items.join(",")), "application/json");
+        }
+        if path == "/api/matchups" {
+            self.refresh_all();
+            let since = query.split('&').find_map(|kv| kv.strip_prefix("since=")).and_then(|v| v.parse().ok()).unwrap_or(0);
+            let runs = self.runs.lock().unwrap();
+            return ("200 OK", matchups(&runs, &alias_map(&self.versions()), since), "application/json");
         }
         if path == "/api/prepare" {
             return ("200 OK", self.prepare(), "application/json");

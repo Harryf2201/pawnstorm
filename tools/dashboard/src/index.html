@@ -328,7 +328,17 @@ document.addEventListener('click', e => {
     ui.state[d.toggle] = !isOpen(d.toggle, d.def === '1'); saveUi(); render();
     if (d.toggle.startsWith('run:')) poll();
   } else if (d.go) goTab(d.go, d.run);
-  else if (d.set) { const [k, v] = d.set.split(':'); ui[k] = v; saveUi(); render(); }
+  else if (d.set) {
+    const i = d.set.indexOf(':'), k = d.set.slice(0, i), v = d.set.slice(i + 1);
+    if (k === 'cmpToggle') {
+      // Keeps the current picks (including the defaults shown before any click) in order, so colours stay put.
+      const cur = (ui.cmpSel || '').split(',').filter(Boolean);
+      const base = cur.length ? cur : [...document.querySelectorAll('[data-set^="cmpToggle:"].on')].map(b => b.dataset.set.slice(10));
+      ui.cmpSel = (base.includes(v) ? base.filter(x => x !== v) : base.length < 3 ? [...base, v] : base).join(',');
+    } else ui[k] = v;
+    saveUi(); render();
+    if (k === 'cmpScope') poll();
+  }
   else if (d.act) doAction(d.act);
 });
 
@@ -975,10 +985,123 @@ function champGamesHtml(rr, d, fit) {
     ${mine.length > 40 ? `<button class="btn sm" data-toggle="champ-all-games" style="margin-top:8px">${all ? 'Show the latest 40' : `Show all ${mine.length}`}</button>` : ''}` : '<div class="sub">No finished games yet.</div>'}`;
 }
 
+// ---- Compare engines (Tournaments tab) ----
+// Pick up to three of our engines; see how each did against every Stockfish level and against each
+// other, over the tournaments started in the chosen period.
+let cmpData = { scope: null, pairs: [], anchors: {} };
+const CMP_SCOPES = [['today', 'Today'], ['week', 'Last 7 days'], ['all', 'All time']];
+const cmpScope = () => ui.cmpScope || 'today';
+function cmpSince() {
+  const s = cmpScope(); if (s === 'all') return 0;
+  const d = new Date(); d.setHours(0, 0, 0, 0); if (s === 'week') d.setDate(d.getDate() - 6);
+  return Math.floor(d.getTime() / 1000);
+}
+// Categorical slots 1-3 of the dataviz reference palette, dark steps (the first three pass all-pairs checks on dark).
+const CMP_COL = ['#3987e5', '#d95926', '#199e70'];
+const cmpStats = r => {
+  const n = r.w + r.d + r.l; if (!n) return null;
+  const p = (r.w + r.d / 2) / n, v = Math.max(1e-6, (r.w + r.d / 4) / n - p * p), se = Math.sqrt(v / n);
+  const q = Math.min(0.995, Math.max(0.005, p)), elo = -400 * Math.log10(1 / q - 1);
+  return { n, p, se, elo, err: 1.96 * se * 400 / Math.LN10 / Math.max(0.01, q * (1 - q)) };
+};
+
+function renderCompare() {
+  const scope = cmpScope();
+  const scopeBtns = CMP_SCOPES.map(([k, n]) => `<button class="btn sm ${scope === k ? 'on' : ''}" data-set="cmpScope:${k}">${n}</button>`).join(' ');
+  const wrap = (body, sum) => section('sec:compare', 'Compare engines', sum, `<div class="panel run">
+    <p class="lead">Pick up to three engines to see how each scored against every Stockfish level (weak to full strength) and against each other. Dots are actual scores with their margin of error; the dashed line is what each engine's Stockfish rating predicts, so a dot far from its line means it does better or worse than usual against that level.</p>
+    <div style="margin-bottom:10px">${scopeBtns}</div>${body}</div>`, true);
+  if (cmpData.scope !== scope) return wrap('<div class="empty">Loading…</div>', '');
+  const rec = {};
+  const put = (a, b, w, d, l) => { (rec[a] ??= {})[b] = { w, d, l }; };
+  for (const [a, b, w, d, l] of cmpData.pairs) { put(a, b, w, d, l); put(b, a, l, d, w); }
+  const anc = cmpData.anchors;
+  const isSF = n => anc[n] != null || /^stockfish$/i.test(n);
+  const total = (n, f) => Object.entries(rec[n] || {}).filter(([o]) => f(o)).reduce((s, [, r]) => s + r.w + r.d + r.l, 0);
+  const ours = Object.keys(rec).filter(isOurs).sort((a, b) => total(b, isSF) - total(a, isSF) || total(b, () => true) - total(a, () => true));
+  if (!ours.length) return wrap('<div class="empty">No games by our engines in this period.</div>', '');
+  let sel = (ui.cmpSel || '').split(',').filter(n => ours.includes(n));
+  // Default: the two engines from the newest tests (those that played Stockfish first).
+  const rec2 = cmpData.recent || {};
+  if (!sel.length) sel = [...ours].sort((a, b) => (rec2[b] || 0) - (rec2[a] || 0) || (total(b, isSF) > 0) - (total(a, isSF) > 0)).slice(0, 2);
+  const col = n => CMP_COL[sel.indexOf(n)];
+  const chips = ours.slice(0, 16).map(n => {
+    const on = sel.includes(n), full = !on && sel.length >= 3;
+    return `<button class="btn sm ${on ? 'on' : ''}" data-set="cmpToggle:${esc(n)}" ${full ? 'disabled title="Three at most: deselect one first"' : ''}>${on ? `<i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${col(n)};margin-right:5px"></i>` : ''}${esc(short(n))}</button>`;
+  }).join(' ');
+  const sfOpp = [...new Set(sel.flatMap(n => Object.keys(rec[n] || {}).filter(isSF)))]
+    .sort((a, b) => (anc[a] ?? 1e9) - (anc[b] ?? 1e9));
+  const sfName = o => anc[o] != null ? 'SF ' + anc[o].toFixed(0) : 'SF full';
+  const rating = Object.fromEntries(sel.map(n => [n, sfOnly(Object.entries(rec[n] || {}).filter(([o]) => anc[o] != null).map(([o, r]) => ({ ...r, anchor: anc[o] })))]));
+
+  // Cards: Stockfish-only rating and overall score vs Stockfish.
+  const cards = sel.map(n => {
+    const r = rating[n], all = sfOpp.reduce((s, o) => { const x = rec[n]?.[o]; if (x) { s.w += x.w; s.d += x.d; s.l += x.l; } return s; }, { w: 0, d: 0, l: 0 });
+    const st = cmpStats(all);
+    return `<div class="card"><div class="k"><i style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${col(n)};margin-right:6px"></i>${esc(label(n))}</div>
+      <div class="v">${r ? r.rating.toFixed(0) : '–'}${r ? ` <span class="sub" style="font-size:.55em">±${r.err.toFixed(0)}</span>` : ''}</div>
+      <div class="d">rating from Stockfish games only${st ? ` · scored ${(100 * st.p).toFixed(1)}% in ${st.n} (${all.w}–${all.d}–${all.l})` : ''}</div></div>`;
+  }).join('');
+
+  // Chart: score against each Stockfish level.
+  let chart = '';
+  if (sfOpp.length) {
+    const W = Math.min(viewW() - 40, 900), H = 260, L = 44, R = 14, T = 14, B = 34;
+    const step = (W - L - R) / sfOpp.length, X = i => L + step * (i + 0.5), Y = v => T + (1 - v / 100) * (H - T - B);
+    let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="Score against each Stockfish level">`;
+    for (const v of [0, 25, 50, 75, 100]) s += `<line class="gl" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${v}%</text>`;
+    sfOpp.forEach((o, i) => s += `<text class="ax" x="${X(i)}" y="${H - 12}" text-anchor="middle">${esc(sfName(o))}</text>`);
+    const off = k => (k - (sel.length - 1) / 2) * Math.min(14, step / 5);
+    sel.forEach((n, k) => {
+      const r = rating[n];
+      if (r) {
+        const pts = sfOpp.map((o, i) => anc[o] == null ? null : `${X(i) + off(k)},${Y(100 / (1 + Math.pow(10, (anc[o] - r.rating) / 400)))}`).filter(Boolean);
+        if (pts.length > 1) s += `<polyline points="${pts.join(' ')}" fill="none" stroke="${col(n)}" stroke-width="2" stroke-dasharray="5 4" stroke-opacity=".55"/>`;
+      }
+      sfOpp.forEach((o, i) => {
+        const x = rec[n]?.[o], st = x && cmpStats(x); if (!st) return;
+        const cx = X(i) + off(k), lo = Math.max(0, 100 * (st.p - 1.96 * st.se)), hi = Math.min(100, 100 * (st.p + 1.96 * st.se));
+        const exp = r && anc[o] != null ? 100 / (1 + Math.pow(10, (anc[o] - r.rating) / 400)) : null;
+        s += `<line x1="${cx}" x2="${cx}" y1="${Y(lo)}" y2="${Y(hi)}" stroke="${col(n)}" stroke-width="2" stroke-opacity=".5"/>`;
+        s += `<circle cx="${cx}" cy="${Y(100 * st.p)}" r="5.5" fill="${col(n)}" stroke="var(--panel)" stroke-width="2"><title>${esc(short(n))} vs ${esc(sfName(o))}: ${(100 * st.p).toFixed(1)}% (${x.w}–${x.d}–${x.l} in ${st.n})${exp != null ? `, expected ${exp.toFixed(1)}% from its Stockfish rating` : ''}</title></circle>`;
+        s += `<circle cx="${cx}" cy="${Y(100 * st.p)}" r="12" fill="transparent"><title>${esc(short(n))} vs ${esc(sfName(o))}: ${(100 * st.p).toFixed(1)}% (${x.w}–${x.d}–${x.l} in ${st.n})${exp != null ? `, expected ${exp.toFixed(1)}%` : ''}</title></circle>`;
+      });
+    });
+    s += '</svg>';
+    const legend = `<div class="legend">${sel.map(n => `<span><i style="background:${col(n)}"></i>${esc(short(n))}</span>`).join('')}<span>· dot = actual score, bar = margin of error, dashed = expected from its Stockfish rating</span></div>`;
+    chart = `<h4>Score against each Stockfish level</h4>${s}${legend}`;
+  }
+
+  // Table: every Stockfish level, then the selected engines against each other.
+  const cell = (n, o) => {
+    const x = rec[n]?.[o], st = x && cmpStats(x); if (!st) return '<td class="num sub">–</td><td class="num sub"></td><td class="num sub"></td>';
+    const perf = anc[o] != null ? anc[o] + st.elo : null;
+    // A perfect (or zero) score only bounds the rating.
+    const bound = st.p >= 0.995 ? '≥ ' : st.p <= 0.005 ? '≤ ' : '';
+    return `<td class="num">${x.w}–${x.d}–${x.l}</td><td class="num"><b>${(100 * st.p).toFixed(1)}%</b></td><td class="num sub">${perf != null ? bound + perf.toFixed(0) : (isSF(o) ? '' : fmtElo(st.elo))}</td>`;
+  };
+  const head = `<tr><th>Opponent</th>${sel.map(n => `<th class="num" colspan="3"><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${col(n)};margin-right:5px"></i>${esc(short(n))}</th>`).join('')}</tr>
+    <tr><th></th>${sel.map(() => '<th class="num">W–D–L</th><th class="num">Score</th><th class="num">Perf.</th>').join('')}</tr>`;
+  const rowsSF = sfOpp.map(o => `<tr><td><b>${esc(sfName(o))}</b></td>${sel.map(n => cell(n, o)).join('')}</tr>`).join('');
+  const rowsUs = sel.map(o => `<tr><td><b>${esc(short(o))}</b> <span class="sub">head to head</span></td>${sel.map(n => n === o ? '<td class="num sub" colspan="3">—</td>' : cell(n, o)).join('')}</tr>`).join('');
+  const table = `<h4>Results by opponent</h4><div class="sub" style="font-size:12px;margin-bottom:6px">Perf. = the rating that score is worth against that Stockfish level (full-strength Stockfish has no fixed rating); against our own engines it is the Elo difference.</div>
+    <div class="cl-wrap"><table class="cl"><thead>${head}</thead><tbody>${rowsSF}${sel.length > 1 ? rowsUs : ''}</tbody></table></div>`;
+
+  // Head to head summary.
+  const h2h = [];
+  for (let i = 0; i < sel.length; i++) for (let j = i + 1; j < sel.length; j++) {
+    const x = rec[sel[i]]?.[sel[j]], st = x && cmpStats(x);
+    h2h.push(st ? `<div class="card"><div class="k">${esc(short(sel[i]))} vs ${esc(short(sel[j]))}</div><div class="v ${cls(st.elo)}">${fmtElo(st.elo, st.err)}</div><div class="d">${x.w}–${x.d}–${x.l} · ${(100 * st.p).toFixed(1)}% in ${st.n} games</div></div>`
+      : `<div class="card"><div class="k">${esc(short(sel[i]))} vs ${esc(short(sel[j]))}</div><div class="v">–</div><div class="d">no games between them in this period</div></div>`);
+  }
+  const sum = sel.map(n => short(n) + (rating[n] ? ' ' + rating[n].rating.toFixed(0) : '')).join(' · ');
+  return wrap(`<div style="margin-bottom:12px">${chips}</div><div class="cards">${cards}${h2h.join('')}</div>${chart}${table}`, sum);
+}
+
 function renderTournaments() {
   const live = runs.filter(r => r.status === 'running');
   const done = runs.filter(r => r.status !== 'running');
-  let h = `<h2>In progress (${live.length})</h2>` +
+  let h = renderCompare() + `<h2>In progress (${live.length})</h2>` +
     (live.length ? live.map(r => `<div class="panel run">${renderRun(details[r.id], r)}</div>`).join('') : '<div class="empty">Nothing is running right now.</div>');
   h += `<h2>Finished (${done.length})</h2><p class="lead">Tap a tournament to see its results, games and charts.</p>`;
   h += done.map(r => {
@@ -1642,6 +1765,10 @@ async function poll() {
     if (champ && tab === 'championship' && (n % 5 === 0 || champGames.id !== champ.id)) {
       const gl = await j('/api/run/' + encodeURIComponent(champ.id) + '/games');
       if (gl) champGames = { id: champ.id, list: gl };
+    }
+    if (tab === 'tournaments' && (n % 5 === 0 || cmpData.scope !== cmpScope())) {
+      const scope = cmpScope(), m = await j('/api/matchups?since=' + cmpSince());
+      if (m) cmpData = { scope, ...m };
     }
     $('#updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     loaded = true;
