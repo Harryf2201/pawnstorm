@@ -16,8 +16,39 @@ const SCALE: i32 = 400;
 const QA: i32 = 255;
 const QB: i32 = 64;
 
+/// King input buckets (bullet's ChessBucketsMirrored): each side's inputs use a different set of
+/// first-layer weights depending on where its own king stands (from its own point of view), and
+/// the board is mirrored left-right when that king is on the e-h files. Must match the trainer.
+#[rustfmt::skip]
+const BUCKET_LAYOUT: [usize; 32] = [
+    0, 0, 1, 1,
+    2, 2, 2, 2,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+];
+pub const INPUT_BUCKETS: usize = 4;
+
+/// (bucket, file flip) for a king on `ksq`, given in its own side's orientation.
+#[inline(always)]
+fn king_bucket(ksq: usize) -> (usize, usize) {
+    let file = ksq % 8;
+    let col = if file > 3 { 7 - file } else { file };
+    (BUCKET_LAYOUT[(ksq / 8) * 4 + col], if file > 3 { 7 } else { 0 })
+}
+
+/// The bucket and flip used for `persp`'s inputs in position `b`.
+#[inline(always)]
+fn persp_bucket(b: &Board, persp: usize) -> (usize, usize) {
+    let ksq = (b.pieces[KING] & b.colors[persp]).trailing_zeros() as usize;
+    king_bucket(if persp == WHITE { ksq } else { ksq ^ 56 })
+}
+
 /// Size of bullet's quantised output (it may be padded to a multiple of 64).
-pub const NET_BYTES: usize = (768 * HIDDEN + HIDDEN + 2 * HIDDEN * OUTPUT_BUCKETS + OUTPUT_BUCKETS) * 2;
+pub const NET_BYTES: usize = (768 * INPUT_BUCKETS * HIDDEN + HIDDEN + 2 * HIDDEN * OUTPUT_BUCKETS + OUTPUT_BUCKETS) * 2;
 
 #[derive(Clone, Copy)]
 #[repr(C, align(64))]
@@ -27,7 +58,7 @@ pub struct Accumulator {
 
 #[repr(C)]
 pub struct Network {
-    feature_weights: [Accumulator; 768],
+    feature_weights: [Accumulator; 768 * INPUT_BUCKETS],
     feature_bias: Accumulator,
     /// One row of 2 * HIDDEN weights per bucket (bullet saves them transposed this way).
     output_weights: [[i16; 2 * HIDDEN]; OUTPUT_BUCKETS],
@@ -77,40 +108,50 @@ pub fn active() -> bool {
     unsafe { NET.is_some() }
 }
 
-/// Input feature for piece `pc` (color * 6 + type) on `sq`, seen from `persp`'s side.
+/// Input feature for piece `pc` (color * 6 + type) on `sq`, seen from `persp`'s side, whose king
+/// bucket and file flip are `kb`.
 #[inline(always)]
-fn feature(persp: usize, pc: usize, sq: usize) -> usize {
+fn feature(persp: usize, kb: (usize, usize), pc: usize, sq: usize) -> usize {
     let (c, pt) = (pc / 6, pc % 6);
-    if persp == WHITE {
+    let f = if persp == WHITE {
         if c == WHITE { 64 * pt + sq } else { 384 + 64 * pt + sq }
     } else if c == BLACK {
         64 * pt + (sq ^ 56)
     } else {
         384 + 64 * pt + (sq ^ 56)
-    }
+    };
+    768 * kb.0 + (f ^ kb.1)
 }
 
 /// Accumulators for both perspectives, indexed by color.
 pub type AccPair = [Accumulator; 2];
 
-pub fn refresh(b: &Board, acc: &mut AccPair) {
+/// Recomputes one perspective's accumulator from scratch.
+fn refresh_one(b: &Board, persp: usize, a: &mut Accumulator) {
     let net = net();
-    for (persp, a) in acc.iter_mut().enumerate() {
-        *a = net.feature_bias;
-        for sq in 0..64 {
-            let pc = b.mailbox[sq];
-            if pc != NO_PIECE {
-                let w = &net.feature_weights[feature(persp, pc as usize, sq)].vals;
-                for (v, d) in a.vals.iter_mut().zip(w) {
-                    *v += *d;
-                }
+    let kb = persp_bucket(b, persp);
+    *a = net.feature_bias;
+    for sq in 0..64 {
+        let pc = b.mailbox[sq];
+        if pc != NO_PIECE {
+            let w = &net.feature_weights[feature(persp, kb, pc as usize, sq)].vals;
+            for (v, d) in a.vals.iter_mut().zip(w) {
+                *v += *d;
             }
         }
     }
 }
 
-/// Computes the child's accumulators from the parent's for `mv` played in position `b`.
-pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
+pub fn refresh(b: &Board, acc: &mut AccPair) {
+    for (persp, a) in acc.iter_mut().enumerate() {
+        refresh_one(b, persp, a);
+    }
+}
+
+/// Computes the child's accumulators from the parent's for `mv` played in position `b`
+/// (`after` is the position after the move). A king move into another bucket, or across the
+/// d/e-file mirror line, changes every input of that side, so its accumulator is rebuilt.
+pub fn update(b: &Board, after: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
     let (from, to) = (mv.from(), mv.to());
     let us = b.stm;
     let moved = b.mailbox[from] as usize;
@@ -138,13 +179,18 @@ pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
 
     let net = net();
     for persp in 0..2 {
+        let kb = persp_bucket(b, persp);
+        if persp == us && moved % 6 == KING && persp_bucket(after, persp) != kb {
+            refresh_one(after, persp, &mut child[persp]);
+            continue;
+        }
         let add: [&[i16; HIDDEN]; 2] = [
-            &net.feature_weights[feature(persp, adds[0].0, adds[0].1)].vals,
-            &net.feature_weights[feature(persp, adds[1].0, adds[1].1)].vals,
+            &net.feature_weights[feature(persp, kb, adds[0].0, adds[0].1)].vals,
+            &net.feature_weights[feature(persp, kb, adds[1].0, adds[1].1)].vals,
         ];
         let sub: [&[i16; HIDDEN]; 2] = [
-            &net.feature_weights[feature(persp, subs[0].0, subs[0].1)].vals,
-            &net.feature_weights[feature(persp, subs[1].0, subs[1].1)].vals,
+            &net.feature_weights[feature(persp, kb, subs[0].0, subs[0].1)].vals,
+            &net.feature_weights[feature(persp, kb, subs[1].0, subs[1].1)].vals,
         ];
         let src = &parent[persp].vals;
         let dst = &mut child[persp].vals;
@@ -259,8 +305,10 @@ mod tests {
                     }
                     let mv = moves[(rand() % moves.len() as u64) as usize];
                     let mut next = [Accumulator { vals: [0; HIDDEN] }; 2];
-                    update(&b, mv, &acc, &mut next);
-                    b.make_move(mv);
+                    let mut after = b;
+                    after.make_move(mv);
+                    update(&b, &after, mv, &acc, &mut next);
+                    b = after;
                     let mut fresh = [Accumulator { vals: [0; HIDDEN] }; 2];
                     refresh(&b, &mut fresh);
                     for p in 0..2 {
