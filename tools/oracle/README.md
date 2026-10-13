@@ -20,13 +20,15 @@ To switch the network it generates with: commit a new `nets/default.bin`, then o
 
 ## Lichess bot
 
-The server can also run the Lichess bot while the PC is off (1 game at a time, 4 threads; data generation runs at
-Nice=19 via a systemd drop-in, so the bot's engine gets the cores first):
+The server can also run the Lichess bot while the PC is off (1 game at a time, 15 threads, Hash 2048). `datagen-yield.service`
+(`datagen-yield.sh`) pauses self-play (SIGSTOP) while a bot engine process exists, i.e. during a game, and resumes it
+between games, so the game gets every core (low priority alone, Nice=19 + SCHED_IDLE via a systemd drop-in, still
+halved the search speed). With fewer cores (4 OCPU after Nov 8) set Threads in config.yml to nproc - 1.
 
 - `~/pawnstorm-bot`: a checkout of the branch the bot plays (built with `~/.cargo/bin/cargo build --release --bin pawnstorm`),
   linked as `~/lichess-bot/engines/pawnstorm`; network in `~/lichess-bot/engines/`, Syzygy 3-4-5 in `engines/syzygy`.
 - `~/lichess-bot`: lichess-bot with a venv; `config.yml` (holds the token, chmod 600, never committed) is the PC's
-  with server paths, Threads 4, concurrency 1. The account name is in `~/lichess-bot/bot-name`.
+  with server paths, Threads 15, Hash 2048, concurrency 1. The account name is in `~/lichess-bot/bot-name`.
 - `lichess-bot.service` (not enabled at boot). `tools\bot-host.ps1 pc|oracle` on the PC moves the bot between the two;
   `lab-stop.ps1` hands it to the server. `bot-failover.timer` (enabled) starts it when the account has been offline
   for 90 s, e.g. the PC was switched off without lab-stop.

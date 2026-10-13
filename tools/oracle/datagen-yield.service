@@ -1,0 +1,10 @@
+[Unit]
+Description=Pause Pawnstorm self-play while the Lichess bot is in a game
+
+[Service]
+ExecStart=/home/ubuntu/datagen-yield.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
