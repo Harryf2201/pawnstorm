@@ -210,6 +210,8 @@
   .sfline { font-size: 12px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
   .sfline b { color: var(--text); }
   .board { flex: 1; display: grid; grid-template-columns: repeat(8, 1fr); aspect-ratio: 1; border-radius: 4px; overflow: hidden; container-type: inline-size; }
+  .board.ph-board { display: flex; align-items: center; justify-content: center; background: var(--panel); border: 1px dashed var(--border); color: var(--muted); font-size: 12px; }
+  .game.ph { opacity: .7; }
   .sq { display: flex; align-items: center; justify-content: center; position: relative; }
   .sq.l { background: var(--sq-light); } .sq.d { background: var(--sq-dark); }
   .sq.hl::after { content: ""; position: absolute; inset: 0; background: var(--hl); }
@@ -873,6 +875,13 @@ function square(r, f, p, last) {
   const piece = p ? `<span class="pc ${p === p.toUpperCase() ? 'w' : 'b'}">${GLYPH[p.toLowerCase()]}︎</span>` : '';
   return `<div class="sq ${(r + f) % 2 ? 'd' : 'l'}${hl ? ' hl' : ''}">${piece}</div>`;
 }
+/// A board-sized placeholder, so the page doesn't jump when a game ends and the next hasn't started.
+function liveGamePlaceholder() {
+  const player = `<div class="player"><span class="n sub">–</span><span class="c">–</span></div>`;
+  return `<div class="game ph">${player}<div class="bw"><div class="evalbar"></div><div class="board ph-board"><span>Next game starting…</span></div></div>${player}
+    <div class="ginfo"><span>Move <b>–</b></span><span>Eval <b>–</b></span><span>Depth <b>–</b></span></div></div>`;
+}
+
 function liveGame(g) {
   const whitePct = 50 + 50 * (2 / (1 + Math.exp(-g.cp / 250)) - 1);
   const player = (name, t, to) => `<div class="player ${to ? 'to' : ''}"><span class="n">${to ? '<span class="dot running"></span>' : ''}${esc(short(name))}</span><span class="c">${clock(t)}</span></div>`;
@@ -885,7 +894,9 @@ function liveGame(g) {
 }
 
 // ---- Championship tab: the latest round robin, with ratings fitted from its games alone ----
-const latestChampionship = () => runs.filter(r => r.type === 'roundrobin').sort((a, b) => b.created - a.created)[0];
+// The newest round robin, or a gauntlet of several of our engines against Stockfish (a "ladder"), whichever is newer.
+const latestChampionship = () => runs.filter(r => r.type === 'roundrobin' || (r.type === 'gauntlet' && /stockfish|ladder|championship/i.test(r.name)))
+  .sort((a, b) => b.created - a.created)[0];
 const CHAMP_NAMES = { stockfish: 'Stockfish 18 (full strength)', rubichess: 'RubiChess', dragon: 'Komodo Dragon', plentychess: 'PlentyChess' };
 const champName = n => CHAMP_NAMES[n] || label(n);
 
@@ -959,11 +970,17 @@ function renderChampionship() {
 /// One engine's games in the championship: the ones being played now (live boards, when the event
 /// logs engine output) and every finished game, newest first.
 let champGames = { id: null, list: [] };
+let champSlots = { key: '', n: 0 };
 function champGamesHtml(rr, d, fit) {
   const engines = fit.map(f => f.name);
   const pick = engines.includes(ui.champEngine) ? ui.champEngine : (engines.find(isOurs) || engines[0]);
   const chips = engines.map(n => `<button class="btn sm ${n === pick ? 'on' : ''}" data-set="champEngine:${esc(n)}">${esc(champName(n))}</button>`).join(' ');
-  const live = (d.live || []).filter(g => g.white === pick || g.black === pick);
+  // Fixed order (by fastchess game slot), and as many boards as this engine has had at once, so the
+  // layout stays put while games end and start.
+  const live = (d.live || []).filter(g => g.white === pick || g.black === pick).sort((a, b) => a.slot - b.slot);
+  const key = rr.id + '|' + pick;
+  if (champSlots.key !== key) champSlots = { key, n: 0 };
+  champSlots.n = rr.status === 'running' ? Math.max(champSlots.n, live.length) : live.length;
   const mine = champGames.id === rr.id ? champGames.list.filter(g => g[1] === pick || g[2] === pick).reverse() : [];
   const res = g => g[3] === '1/2-1/2' ? 'd' : ((g[3] === '1-0') === (g[1] === pick) ? 'w' : 'l');
   const rec = { w: 0, d: 0, l: 0 };
@@ -975,7 +992,7 @@ function champGamesHtml(rr, d, fit) {
       <td class="res-${r}"><b>${r === 'w' ? 'Win' : r === 'l' ? 'Loss' : 'Draw'}</b> <span class="sub">${esc(g[3])}</span></td>
       <td class="sub">${esc(g[4])}</td><td class="num">${Math.ceil(g[5] / 2)}</td><td class="num sub">${esc(g[6])}</td></tr>`;
   }).join('');
-  const liveHtml = live.length ? `<div class="games">${live.map(liveGame).join('')}</div>`
+  const liveHtml = champSlots.n ? `<div class="games">${live.map(liveGame).join('')}${liveGamePlaceholder().repeat(champSlots.n - live.length)}</div>`
     : `<div class="sub" style="margin:6px 0 10px">${(d.live || []).length ? 'Not playing this moment.' : rr.status === 'running' ? 'Live boards appear when the championship is started with live logging.' : 'The championship has finished.'}</div>`;
   return `<h4>Games</h4>
     <div class="toolbar" style="flex-wrap:wrap;gap:6px">${chips}</div>
