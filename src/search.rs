@@ -59,6 +59,8 @@ pub struct Searcher {
     capt_hist: Box<[[[i32; 6]; 64]; 12]>,
     cont1: Vec<i32>,
     cont2: Vec<i32>,
+    /// Quiet-move history by pawn structure (pawn_key % PAWN_HIST), piece and destination.
+    pawn_hist: Vec<i32>,
     killers: [[Move; 2]; MAX_PLY + 2],
     stack: [PlyInfo; MAX_PLY + 4],
     pv: Box<[[Move; MAX_PLY + 1]; MAX_PLY + 1]>,
@@ -98,6 +100,7 @@ pub struct Searcher {
 }
 
 const CORR_SIZE: usize = 16384;
+const PAWN_HIST: usize = 512;
 const CORR_GRAIN: i32 = 256;
 const CORR_WEIGHT_SCALE: i32 = 256;
 const CORR_MAX: i32 = CORR_GRAIN * 32;
@@ -190,6 +193,7 @@ impl Searcher {
             capt_hist: Box::new([[[0; 6]; 64]; 12]),
             cont1: vec![0; 768 * 768],
             cont2: vec![0; 768 * 768],
+            pawn_hist: vec![0; PAWN_HIST * 768],
             killers: [[Move::NULL; 2]; MAX_PLY + 2],
             stack: [PlyInfo::default(); MAX_PLY + 4],
             pv: Box::new([[Move::NULL; MAX_PLY + 1]; MAX_PLY + 1]),
@@ -221,6 +225,7 @@ impl Searcher {
         *self.capt_hist = [[[0; 6]; 64]; 12];
         self.cont1.fill(0);
         self.cont2.fill(0);
+        self.pawn_hist.fill(0);
         self.killers = [[Move::NULL; 2]; MAX_PLY + 2];
         for side in self.corr.iter_mut().chain(self.cont_corr.iter_mut()) {
             side.fill(0);
@@ -349,6 +354,7 @@ impl Searcher {
         let idx = b.mailbox[mv.from()] as usize * 64 + mv.to();
         let (tf, tt) = ((threats >> mv.from()) as usize & 1, (threats >> mv.to()) as usize & 1);
         let mut s = self.butterfly[b.stm][tf][tt][mv.from()][mv.to()];
+        s += self.pawn_hist[(pawn_key(b) % PAWN_HIST) * 768 + idx];
         let c1 = self.prev_cont(ply, 1);
         if c1 != NO_CONT {
             s += self.cont1[c1 * 768 + idx];
@@ -364,6 +370,7 @@ impl Searcher {
         let idx = b.mailbox[mv.from()] as usize * 64 + mv.to();
         let (tf, tt) = ((threats >> mv.from()) as usize & 1, (threats >> mv.to()) as usize & 1);
         gravity(&mut self.butterfly[b.stm][tf][tt][mv.from()][mv.to()], bonus);
+        gravity(&mut self.pawn_hist[(pawn_key(b) % PAWN_HIST) * 768 + idx], bonus);
         let c1 = self.prev_cont(ply, 1);
         if c1 != NO_CONT {
             gravity(&mut self.cont1[c1 * 768 + idx], bonus);
