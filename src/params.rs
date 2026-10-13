@@ -41,6 +41,7 @@ params! {
     CorrNonPawnW = 96, 0, 384;
     CorrContW = 96, 0, 384;
     TtPvLmr = 1, 0, 2;
+    DeeperMargin = 40, 10, 100;
 }
 
 static mut GENERATION: u32 = 0;

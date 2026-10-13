@@ -829,7 +829,7 @@ impl Searcher {
             self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
             self.hashes.push(nb.hash);
             legal += 1;
-            let new_depth = depth - 1 + ext;
+            let mut new_depth = depth - 1 + ext;
             let nodes_before = self.nodes;
 
             let score = if legal == 1 {
@@ -855,6 +855,9 @@ impl Searcher {
                 }
                 let mut s = -self.negamax(&nb, new_depth - r, -alpha - 1, -alpha, ply + 1, true);
                 if s > alpha && r > 0 {
+                    // The reduced search beat alpha: re-search a little deeper if it did so by a lot,
+                    // shallower if only just.
+                    new_depth += (s > best + p(P::DeeperMargin) + 2 * new_depth) as i32 - (s < best + new_depth) as i32;
                     s = -self.negamax(&nb, new_depth, -alpha - 1, -alpha, ply + 1, !cut_node);
                 }
                 if s > alpha && s < beta {
