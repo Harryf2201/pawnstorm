@@ -1,11 +1,11 @@
-# Collects self-play data from the always-on Oracle Cloud server (see tools\engines.local.ps1 for its
+﻿# Collects self-play data from the always-on Oracle Cloud server (see tools\engines.local.ps1 for its
 # address). The server writes finished 1-hour segments to ~/outbox/seg-<time>/ (gzipped data plus
 # status.txt); this copies each one into testing\datagen\<Name>\, then deletes it on the server.
 # testing\datagen\<Name>\status.txt totals every collected segment for the dashboard and training.
 # Usage: .\tools\oracle-sync.ps1            (loop every 10 minutes; run hidden in the background)
 #        .\tools\oracle-sync.ps1 -Once
-# -Name: the data folder; it changes with each data generation (oracle-gen2 = v0.8's network, oracle-gen3 = v1.3's, oracle-gen4 = v1.7m's).
-param([switch]$Once, [int]$IntervalSeconds = 600, [string]$Name = 'oracle-gen4')
+# -Name: the data folder; it changes with each data generation (oracle-gen2 = v0.8's network, oracle-gen3 = v1.3's, oracle-gen4 = v1.7m's, oracle-gen5 = v1.11's).
+param([switch]$Once, [int]$IntervalSeconds = 600, [string]$Name = 'oracle-gen5')
 
 . "$PSScriptRoot\paths.ps1"
 if (-not $OracleHost) { throw 'Set $OracleHost and $OracleKey in tools\engines.local.ps1' }
