@@ -8,6 +8,8 @@ A UCI chess engine written in Rust.
 - NNUE evaluation `(768 -> 512)x2 -> 1` trained with [bullet](https://github.com/jw1912/bullet)
   on self-play data, with a hand-crafted fallback evaluation
 
+See [EXPERIMENTS.md](EXPERIMENTS.md) for everything tried so far and where each result lives.
+
 ## Building
 
 ```
