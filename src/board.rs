@@ -259,6 +259,34 @@ impl Board {
             | (rook_attacks(sq, occ) & (self.pieces[ROOK] | self.pieces[QUEEN]))
     }
 
+    /// Every square attacked by `by` (for threat-aware move ordering).
+    pub fn threats(&self, by: usize) -> u64 {
+        let occ = self.occ();
+        let c = self.colors[by];
+        let mut t = 0;
+        let mut x = self.pieces[PAWN] & c;
+        while x != 0 {
+            t |= PAWN_ATTACKS[by][x.trailing_zeros() as usize];
+            x &= x - 1;
+        }
+        let mut x = self.pieces[KNIGHT] & c;
+        while x != 0 {
+            t |= KNIGHT_ATTACKS[x.trailing_zeros() as usize];
+            x &= x - 1;
+        }
+        let mut x = (self.pieces[BISHOP] | self.pieces[QUEEN]) & c;
+        while x != 0 {
+            t |= bishop_attacks(x.trailing_zeros() as usize, occ);
+            x &= x - 1;
+        }
+        let mut x = (self.pieces[ROOK] | self.pieces[QUEEN]) & c;
+        while x != 0 {
+            t |= rook_attacks(x.trailing_zeros() as usize, occ);
+            x &= x - 1;
+        }
+        t | KING_ATTACKS[(self.pieces[KING] & c).trailing_zeros() as usize]
+    }
+
     #[inline]
     pub fn is_attacked(&self, sq: usize, by: usize, occ: u64) -> bool {
         let c = self.colors[by];

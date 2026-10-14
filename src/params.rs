@@ -37,6 +37,11 @@ params! {
     HistBonusMax = 1500, 500, 3000;
     QsFutility = 150, 50, 300;
     TmSoftPct = 60, 30, 90;
+    CorrPawnW = 256, 64, 512;
+    CorrNonPawnW = 96, 0, 384;
+    CorrContW = 96, 0, 384;
+    TtPvLmr = 1, 0, 2;
+    DeeperMargin = 40, 10, 100;
 }
 
 static mut GENERATION: u32 = 0;
