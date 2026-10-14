@@ -12,6 +12,7 @@ param(
     [string]$Net = 'pawnstorm-v1.7m.nnue',
     [string]$TC = '6+0.06',
     [int]$PairsPerIteration = 8,
+    [int]$Concurrency = 15,
     [int]$Iterations = 2000,
     [double]$REnd = 0.002
 )
@@ -62,7 +63,7 @@ while ($state.k -lt $N -and -not (Test-Path "$dir\STOP")) {
     # Tests and tournaments come first: only 4 games at a time while one is running.
     $others = @(Get-CimInstance Win32_Process -Filter "Name='fastchess.exe'" | Where-Object { $_.CommandLine -notmatch 'name=spsa-a' })
     # (One thread always stays free for the Lichess bot, which plays in real time.)
-    $conc = if ($others.Count) { 3 } else { 15 }
+    $conc = if ($others.Count) { 3 } else { $Concurrency }
     $out = & $fastchess -engine "cmd=$exe" name=spsa-a @optsA -engine "cmd=$exe" name=spsa-b @optsB `
         -each "tc=$TC" option.Hash=16 "option.EvalFile=$LabRoot\engines\$Net" `
         -openings "file=$LabRoot\books\8moves_v3.pgn" format=pgn order=random -srand ($state.started + $k) `
