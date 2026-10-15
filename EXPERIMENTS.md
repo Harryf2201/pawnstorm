@@ -59,7 +59,8 @@ Elo below is from SPRT/self-play unless it says "vs Stockfish". ± is the 95% ma
 | stack5: corr2 + TT-PV + threat-aware history + pawn history + deeper/shallower re-searches | +12.7 ±8.4 (1476 games); tied with v1.9 vs Stockfish | Kept (v1.10 → v1.11) | dev |
 | Pondering (thinks on the opponent's time) | Works on Lichess; not measured in tests | Kept (bot) | dev |
 | Finny accumulator cache for king buckets | +10–17% speed, identical search | Only useful with king buckets (not in use) | widekb |
-| SPSA run 2 (28 settings incl. the 5 new ones) on v1.11 | Running, ~70% done | — | `testing\spsa` |
+| SPSA run 2 (28 settings incl. the 5 new ones) on v1.11 | +2 ±7 self-play; 54.7% vs 51.8% for v1.11 against Stockfish | Kept (v1.11s → v1.12) | `testing\spsa` |
+| ARM (NEON) kernels for the multi-layer network: sdot dot product with 4 independent sums | +22% speed on Oracle (595k → 726k nps), identical search; plain NEON widening multiplies gave only +1% | Kept (master) | branch neon |
 
 ## Lichess bot
 
