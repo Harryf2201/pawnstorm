@@ -286,19 +286,30 @@ fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
 #[inline(always)]
 fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
     use std::arch::aarch64::*;
-    // The inputs are 0..=127, so they are also valid i8: signed widening multiplies, pairwise-added into i32.
+    // The inputs are 0..=127, so they are also valid i8. Four independent sums so the multiply-accumulates
+    // don't wait on each other.
     unsafe {
-        let mut s0 = vdupq_n_s32(0);
-        let mut s1 = vdupq_n_s32(0);
+        let mut s = [vdupq_n_s32(0); 4];
         let mut i = 0;
         while i < HIDDEN {
-            let xv = vreinterpretq_s8_u8(vld1q_u8(x.as_ptr().add(i)));
-            let wv = vld1q_s8(w.as_ptr().add(i));
-            s0 = vpadalq_s16(s0, vmull_s8(vget_low_s8(xv), vget_low_s8(wv)));
-            s1 = vpadalq_s16(s1, vmull_high_s8(xv, wv));
-            i += 16;
+            for (k, sk) in s.iter_mut().enumerate() {
+                let xv = vreinterpretq_s8_u8(vld1q_u8(x.as_ptr().add(i + 16 * k)));
+                let wv = vld1q_s8(w.as_ptr().add(i + 16 * k));
+                // sdot: four i8 products summed into each i32 lane (ARMv8.2 dot product); otherwise widening
+                // multiplies pairwise-added into i32.
+                #[cfg(target_feature = "dotprod")]
+                {
+                    *sk = vdotq_s32(*sk, xv, wv);
+                }
+                #[cfg(not(target_feature = "dotprod"))]
+                {
+                    *sk = vpadalq_s16(*sk, vmull_s8(vget_low_s8(xv), vget_low_s8(wv)));
+                    *sk = vpadalq_s16(*sk, vmull_high_s8(xv, wv));
+                }
+            }
+            i += 64;
         }
-        vaddvq_s32(vaddq_s32(s0, s1))
+        vaddvq_s32(vaddq_s32(vaddq_s32(s[0], s[1]), vaddq_s32(s[2], s[3])))
     }
 }
 
