@@ -42,6 +42,7 @@ params! {
     CorrContW = 96, 0, 384;
     TtPvLmr = 1, 0, 2;
     DeeperMargin = 40, 10, 100;
+    TmForcedDepth = 4, 0, 8;
 }
 
 static mut GENERATION: u32 = 0;
