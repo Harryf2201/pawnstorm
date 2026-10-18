@@ -126,6 +126,8 @@ pub struct Searcher {
     cont_corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// NNUE accumulators per ply.
     acc: Vec<AccPair>,
+    /// Accumulator cache for king-bucket changes (see nnue::AccCache).
+    acc_cache: nnue::AccCache,
     /// Nodes spent below each root move (from, to) in this search, for time management.
     root_nodes: Box<[[u64; 64]; 64]>,
     /// Whether the soft limit comes from a game clock (and may be stretched or shortened).
@@ -253,6 +255,7 @@ impl Searcher {
             np_corr: vec![[[0i32; CORR_SIZE]; 2]; 2].into_boxed_slice().try_into().unwrap(),
             cont_corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             acc: vec![[Accumulator { vals: [0; nnue::HIDDEN] }; 2]; MAX_PLY + 8],
+            acc_cache: nnue::AccCache::new(),
             root_nodes: Box::new([[0; 64]; 64]),
             clock_tm: false,
             start: Instant::now(),
@@ -391,10 +394,10 @@ impl Searcher {
 
     /// Fills the accumulators for ply + 1 after `mv` is played from `b` at `ply`.
     #[inline(always)]
-    fn nnue_update(&mut self, b: &Board, mv: Move, ply: usize) {
+    fn nnue_update(&mut self, b: &Board, after: &Board, mv: Move, ply: usize) {
         if nnue::active() {
             let (parent, child) = self.acc.split_at_mut(ply + 1);
-            nnue::update(b, mv, &parent[ply], &mut child[0]);
+            nnue::update(b, after, mv, &parent[ply], &mut child[0], &mut self.acc_cache);
         }
     }
 
@@ -796,7 +799,7 @@ impl Searcher {
                     let mut nb = *b;
                     nb.make_move(mv);
                     self.tt.prefetch(nb.hash);
-                    self.nnue_update(b, mv, ply);
+                    self.nnue_update(b, &nb, mv, ply);
                     self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
                     self.hashes.push(nb.hash);
                     let mut s = -self.qsearch(&nb, -pc_beta, -pc_beta + 1, ply + 1);
@@ -894,7 +897,7 @@ impl Searcher {
             let mut nb = *b;
             nb.make_move(mv);
             self.tt.prefetch(nb.hash);
-            self.nnue_update(b, mv, ply);
+            self.nnue_update(b, &nb, mv, ply);
             if ext == 0 && nb.in_check() {
                 ext = 1;
             }
@@ -1091,7 +1094,7 @@ impl Searcher {
             let mut nb = *b;
             nb.make_move(mv);
             self.tt.prefetch(nb.hash);
-            self.nnue_update(b, mv, ply);
+            self.nnue_update(b, &nb, mv, ply);
             legal += 1;
             self.hashes.push(nb.hash);
             let score = -self.qsearch(&nb, -beta, -alpha, ply + 1);

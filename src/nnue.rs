@@ -18,8 +18,39 @@ const L2: usize = 32;
 const SCALE: f32 = 400.0;
 const QA: i32 = 255;
 
+/// King input buckets (bullet's ChessBucketsMirrored, trainer -Inputs mlkb4): each side's inputs use a different set of
+/// first-layer weights depending on where its own king stands (from its own point of view), and the board is
+/// mirrored left-right when that king is on the e-h files. Must match the trainer's KING_BUCKETS_4.
+#[rustfmt::skip]
+const BUCKET_LAYOUT: [usize; 32] = [
+    0, 0, 1, 1,
+    2, 2, 2, 2,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+    3, 3, 3, 3,
+];
+pub const INPUT_BUCKETS: usize = 4;
+
+/// (bucket, file flip) for a king on `ksq`, given in its own side's orientation.
+#[inline(always)]
+fn king_bucket(ksq: usize) -> (usize, usize) {
+    let file = ksq % 8;
+    let col = if file > 3 { 7 - file } else { file };
+    (BUCKET_LAYOUT[(ksq / 8) * 4 + col], if file > 3 { 7 } else { 0 })
+}
+
+/// The bucket and flip used for `persp`'s inputs in position `b`.
+#[inline(always)]
+fn persp_bucket(b: &Board, persp: usize) -> (usize, usize) {
+    let ksq = (b.pieces[KING] & b.colors[persp]).trailing_zeros() as usize;
+    king_bucket(if persp == WHITE { ksq } else { ksq ^ 56 })
+}
+
 /// Size of bullet's quantised output (it may be padded to a multiple of 64).
-pub const NET_BYTES: usize = (768 * HIDDEN + HIDDEN) * 2
+pub const NET_BYTES: usize = (768 * INPUT_BUCKETS * HIDDEN + HIDDEN) * 2
     + (HIDDEN * OUTPUT_BUCKETS * L1 + OUTPUT_BUCKETS * L1 + L1 * OUTPUT_BUCKETS * L2 + OUTPUT_BUCKETS * L2 + L2 * OUTPUT_BUCKETS + OUTPUT_BUCKETS) * 4;
 
 #[derive(Clone, Copy)]
@@ -30,7 +61,7 @@ pub struct Accumulator {
 
 #[repr(C)]
 pub struct Network {
-    feature_weights: [Accumulator; 768],
+    feature_weights: [Accumulator; 768 * INPUT_BUCKETS],
     feature_bias: Accumulator,
     // bullet's native (input-major) layout: for each input, the outputs of every bucket in a row.
     l1w: [[[f32; L1]; OUTPUT_BUCKETS]; HIDDEN],
@@ -43,6 +74,8 @@ pub struct Network {
 
 static DEFAULT_NET: &[u8] = include_bytes!("../nets/default.bin");
 static mut NET: Option<&'static Network> = None;
+/// Bumped whenever a network is loaded, so accumulator caches know to start over.
+static NET_GEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// Layer 1 quantised to i8 for speed (built from the f32 weights when a network loads), one row of HIDDEN
 /// weights per (bucket, output). `mul` turns the integer dot product back into the float pre-activation.
@@ -72,6 +105,7 @@ fn set_net(net: &'static Network) {
         L1Q = Some(Box::leak(Box::new(L1Quant { w, mul })));
         NET = Some(net);
     }
+    NET_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
@@ -114,17 +148,19 @@ pub fn active() -> bool {
     unsafe { NET.is_some() }
 }
 
-/// Input feature for piece `pc` (color * 6 + type) on `sq`, seen from `persp`'s side.
+/// Input feature for piece `pc` (color * 6 + type) on `sq`, seen from `persp`'s side, whose king
+/// bucket and file flip are `kb`.
 #[inline(always)]
-fn feature(persp: usize, pc: usize, sq: usize) -> usize {
+fn feature(persp: usize, kb: (usize, usize), pc: usize, sq: usize) -> usize {
     let (c, pt) = (pc / 6, pc % 6);
-    if persp == WHITE {
+    let f = if persp == WHITE {
         if c == WHITE { 64 * pt + sq } else { 384 + 64 * pt + sq }
     } else if c == BLACK {
         64 * pt + (sq ^ 56)
     } else {
         384 + 64 * pt + (sq ^ 56)
-    }
+    };
+    768 * kb.0 + (f ^ kb.1)
 }
 
 /// Accumulators for both perspectives, indexed by color.
@@ -133,11 +169,12 @@ pub type AccPair = [Accumulator; 2];
 pub fn refresh(b: &Board, acc: &mut AccPair) {
     let net = net();
     for (persp, a) in acc.iter_mut().enumerate() {
+        let kb = persp_bucket(b, persp);
         *a = net.feature_bias;
         for sq in 0..64 {
             let pc = b.mailbox[sq];
             if pc != NO_PIECE {
-                let w = &net.feature_weights[feature(persp, pc as usize, sq)].vals;
+                let w = &net.feature_weights[feature(persp, kb, pc as usize, sq)].vals;
                 for (v, d) in a.vals.iter_mut().zip(w) {
                     *v += *d;
                 }
@@ -146,8 +183,72 @@ pub fn refresh(b: &Board, acc: &mut AccPair) {
     }
 }
 
-/// Computes the child's accumulators from the parent's for `mv` played in position `b`.
-pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
+#[derive(Clone)]
+struct CacheEntry {
+    acc: Accumulator,
+    /// The pieces (color * 6 + type) the cached accumulator was built for.
+    bbs: [u64; 12],
+}
+
+/// Accumulator cache ("Finny table"), one entry per perspective, king bucket and mirror side.
+/// When a king move changes its bucket, the new accumulator is made from the cached one for that
+/// bucket by applying only the pieces that differ, instead of summing every piece from scratch.
+pub struct AccCache {
+    gen: u32,
+    e: Vec<CacheEntry>,
+}
+
+impl AccCache {
+    pub fn new() -> AccCache {
+        AccCache { gen: u32::MAX, e: vec![CacheEntry { acc: Accumulator { vals: [0; HIDDEN] }, bbs: [0; 12] }; 2 * INPUT_BUCKETS * 2] }
+    }
+
+    /// Makes `persp`'s accumulator for position `b` into `out`, via the cache.
+    fn refresh_one(&mut self, b: &Board, persp: usize, out: &mut Accumulator) {
+        let net = net();
+        let gen = NET_GEN.load(std::sync::atomic::Ordering::Relaxed);
+        if gen != self.gen {
+            for e in self.e.iter_mut() {
+                e.acc = net.feature_bias;
+                e.bbs = [0; 12];
+            }
+            self.gen = gen;
+        }
+        let kb = persp_bucket(b, persp);
+        let e = &mut self.e[(persp * INPUT_BUCKETS + kb.0) * 2 + (kb.1 != 0) as usize];
+        for pc in 0..12 {
+            let cur = b.pieces[pc % 6] & b.colors[pc / 6];
+            let (mut add, mut sub) = (cur & !e.bbs[pc], e.bbs[pc] & !cur);
+            while add != 0 {
+                let w = &net.feature_weights[feature(persp, kb, pc, add.trailing_zeros() as usize)].vals;
+                for (v, d) in e.acc.vals.iter_mut().zip(w) {
+                    *v += *d;
+                }
+                add &= add - 1;
+            }
+            while sub != 0 {
+                let w = &net.feature_weights[feature(persp, kb, pc, sub.trailing_zeros() as usize)].vals;
+                for (v, d) in e.acc.vals.iter_mut().zip(w) {
+                    *v -= *d;
+                }
+                sub &= sub - 1;
+            }
+            e.bbs[pc] = cur;
+        }
+        *out = e.acc;
+    }
+}
+
+impl Default for AccCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Computes the child's accumulators from the parent's for `mv` played in position `b`
+/// (`after` is the position after the move). A king move into another bucket, or across the
+/// d/e-file mirror line, changes every input of that side, so its accumulator is rebuilt (from `cache`).
+pub fn update(b: &Board, after: &Board, mv: Move, parent: &AccPair, child: &mut AccPair, cache: &mut AccCache) {
     let (from, to) = (mv.from(), mv.to());
     let us = b.stm;
     let moved = b.mailbox[from] as usize;
@@ -175,13 +276,18 @@ pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
 
     let net = net();
     for persp in 0..2 {
+        let kb = persp_bucket(b, persp);
+        if persp == us && moved % 6 == KING && persp_bucket(after, persp) != kb {
+            cache.refresh_one(after, persp, &mut child[persp]);
+            continue;
+        }
         let add: [&[i16; HIDDEN]; 2] = [
-            &net.feature_weights[feature(persp, adds[0].0, adds[0].1)].vals,
-            &net.feature_weights[feature(persp, adds[1].0, adds[1].1)].vals,
+            &net.feature_weights[feature(persp, kb, adds[0].0, adds[0].1)].vals,
+            &net.feature_weights[feature(persp, kb, adds[1].0, adds[1].1)].vals,
         ];
         let sub: [&[i16; HIDDEN]; 2] = [
-            &net.feature_weights[feature(persp, subs[0].0, subs[0].1)].vals,
-            &net.feature_weights[feature(persp, subs[1].0, subs[1].1)].vals,
+            &net.feature_weights[feature(persp, kb, subs[0].0, subs[0].1)].vals,
+            &net.feature_weights[feature(persp, kb, subs[1].0, subs[1].1)].vals,
         ];
         let src = &parent[persp].vals;
         let dst = &mut child[persp].vals;
@@ -384,6 +490,7 @@ mod tests {
             "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
         ];
         let mut checked = 0;
+        let mut cache = AccCache::new();
         for fen in fens {
             for _ in 0..40 {
                 let mut b = Board::from_fen(fen).unwrap();
@@ -396,8 +503,10 @@ mod tests {
                     }
                     let mv = moves[(rand() % moves.len() as u64) as usize];
                     let mut next = [Accumulator { vals: [0; HIDDEN] }; 2];
-                    update(&b, mv, &acc, &mut next);
-                    b.make_move(mv);
+                    let mut after = b;
+                    after.make_move(mv);
+                    update(&b, &after, mv, &acc, &mut next, &mut cache);
+                    b = after;
                     let mut fresh = [Accumulator { vals: [0; HIDDEN] }; 2];
                     refresh(&b, &mut fresh);
                     for p in 0..2 {
