@@ -5,10 +5,10 @@ param(
     [Parameter(Mandatory)][string]$Name,
     [Parameter(Mandatory)][string]$Data,
     [int]$Superbatches = 40,
-    [double]$Wdl = 0.4,
+    [string]$Wdl = '0.4',   # constant, or 'start-end' to rise linearly over training
     [int]$Hidden = 512,
     [int]$Buckets = 1,
-    [ValidateSet('768', 'kb10', 'kb4', 'ml')][string]$Inputs = '768',
+    [ValidateSet('768', 'kb10', 'kb4', 'ml', 'ml32', 'mlkb4')][string]$Inputs = '768',
     [switch]$Build
 )
 

@@ -58,7 +58,15 @@ fn main() {
     let data = args.get(2).cloned().expect("usage: trainer <net-id> <data.bin> <output-dir> [superbatches] [wdl] [hidden] [buckets]");
     let out = args.get(3).cloned().unwrap_or_else(|| "checkpoints".into());
     let superbatches: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(40);
-    let wdl_weight: f32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(0.4);
+    // "0.4" = constant result weight; "0.2-0.6" = rising linearly from the first to the last superbatch.
+    let wdl_arg = args.get(5).cloned().unwrap_or_else(|| "0.4".into());
+    let (wdl_start, wdl_end): (f32, f32) = match wdl_arg.split_once('-') {
+        Some((a, b)) => (a.parse().expect("wdl start"), b.parse().expect("wdl end")),
+        None => {
+            let w = wdl_arg.parse().expect("wdl");
+            (w, w)
+        }
+    };
     let hidden: usize = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(512);
     let buckets: usize = args.get(7).and_then(|s| s.parse().ok()).unwrap_or(1);
     // "768" = plain piece-square inputs; "kb10" = 10 mirrored king buckets (see BUCKET_LAYOUT).
@@ -74,7 +82,7 @@ fn main() {
             start_superbatch: 1,
             end_superbatch: superbatches,
         },
-        wdl_scheduler: wdl::ConstantWDL { value: wdl_weight },
+        wdl_scheduler: wdl::LinearWDL { start: wdl_start, end: wdl_end },
         lr_scheduler: lr::CosineDecayLR { initial_lr: 0.001, final_lr: 0.001 * 0.3f32.powi(5), final_superbatch: superbatches },
         save_rate: 10,
     };
@@ -83,50 +91,84 @@ fn main() {
     println!("Architecture           : ({inputs} -> {hidden})x2 -> {buckets}");
 
     // target = wdl * game_result + (1 - wdl) * sigmoid(score / SCALE)
-    if inputs == "ml" {
+    if inputs == "ml" || inputs == "ml32" || inputs == "mlkb4" {
+        // ml32: 32 neurons in the first hidden layer instead of 16. mlkb4: 4 mirrored king buckets on the inputs,
+        // with a shared factoriser (merged into the bucket weights when saving), like kb4.
+        let l1n: usize = if inputs == "ml32" { 32 } else { 16 };
+        let kb = inputs == "mlkb4";
+        let num_kb = if kb { get_num_buckets(&KING_BUCKETS_4) } else { 1 };
         // Multi-layer: (768 -> hidden, clipped ReLU, pairwise products of the two halves) x2 -> 16 -> 32 -> 1,
         // each layer after the first picked by material (8 output buckets). The first layer is quantised
         // to i16 like the single-layer nets; the small layers stay f32 in their native (input-major) layout.
         assert_eq!(buckets, 8, "the multi-layer net is set up with 8 output buckets");
-        let mut trainer = ValueTrainerBuilder::default()
-            .dual_perspective()
-            .optimiser(AdamW)
-            .inputs(Chess768)
-            .output_buckets(MaterialCount::<8>)
-            .save_format(&[
-                SavedFormat::id("l0w").round().quantise::<i16>(QA),
-                SavedFormat::id("l0b").round().quantise::<i16>(QA),
-                SavedFormat::id("l1w"),
-                SavedFormat::id("l1b"),
-                SavedFormat::id("l2w"),
-                SavedFormat::id("l2b"),
-                SavedFormat::id("l3w"),
-                SavedFormat::id("l3b"),
-            ])
-            .loss_fn(|output, target| output.sigmoid().squared_error(target))
-            .build(|builder, stm_inputs, ntm_inputs, output_buckets| {
-                let l0 = builder.new_affine("l0", 768, hidden);
-                let l1 = builder.new_affine("l1", hidden, 8 * 16);
-                let l2 = builder.new_affine("l2", 16, 8 * 32);
-                let l3 = builder.new_affine("l3", 32, 8);
-                let ft = |input, start, end| l0.slice(start, end).forward(input).crelu();
-                let stm_hidden = ft(stm_inputs, 0, hidden / 2) * ft(stm_inputs, hidden / 2, hidden);
-                let ntm_hidden = ft(ntm_inputs, 0, hidden / 2) * ft(ntm_inputs, hidden / 2, hidden);
-                let hl1 = stm_hidden.concat(ntm_hidden);
-                let hl2 = l1.forward(hl1).select(output_buckets).screlu();
-                let hl3 = l2.forward(hl2).select(output_buckets).screlu();
-                l3.forward(hl3).select(output_buckets)
-            });
-        // Reference evaluations for checking the engine's inference: trainer <id> <data> <checkpoint-dir> ... ml eval=<fen file>
-        if let Some(fens) = args.get(9).and_then(|a| a.strip_prefix("eval=")) {
-            trainer.load_from_checkpoint(&out);
-            for fen in std::fs::read_to_string(fens).expect("fen file").lines().filter(|l| !l.trim().is_empty()) {
-                println!("{:.2}\t{fen}", trainer.eval(fen.trim()));
-            }
-            return;
+        // Same network either way; only the input features (and, with king buckets, the factoriser) differ.
+        macro_rules! ml_trainer {
+            ($inputs:expr, $factorised:expr) => {{
+                let mut trainer = ValueTrainerBuilder::default()
+                    .dual_perspective()
+                    .optimiser(AdamW)
+                    .inputs($inputs)
+                    .output_buckets(MaterialCount::<8>)
+                    .save_format(&[
+                        SavedFormat::id("l0w")
+                            .transform(move |store, weights| {
+                                if !$factorised {
+                                    return weights;
+                                }
+                                let factoriser = store.get("l0f").values.f32().repeat(num_kb);
+                                weights.into_iter().zip(factoriser).map(|(a, b)| a + b).collect()
+                            })
+                            .round()
+                            .quantise::<i16>(QA),
+                        SavedFormat::id("l0b").round().quantise::<i16>(QA),
+                        SavedFormat::id("l1w"),
+                        SavedFormat::id("l1b"),
+                        SavedFormat::id("l2w"),
+                        SavedFormat::id("l2b"),
+                        SavedFormat::id("l3w"),
+                        SavedFormat::id("l3b"),
+                    ])
+                    .loss_fn(|output, target| output.sigmoid().squared_error(target))
+                    .build(|builder, stm_inputs, ntm_inputs, output_buckets| {
+                        let mut l0 = builder.new_affine("l0", 768 * num_kb, hidden);
+                        if $factorised {
+                            let l0f = builder.new_weights("l0f", Shape::new(hidden, 768), InitSettings::Zeroed);
+                            l0.weights = l0.weights + l0f.repeat(num_kb);
+                        }
+                        let l1 = builder.new_affine("l1", hidden, 8 * l1n);
+                        let l2 = builder.new_affine("l2", l1n, 8 * 32);
+                        let l3 = builder.new_affine("l3", 32, 8);
+                        let ft = |input, start, end| l0.slice(start, end).forward(input).crelu();
+                        let stm_hidden = ft(stm_inputs, 0, hidden / 2) * ft(stm_inputs, hidden / 2, hidden);
+                        let ntm_hidden = ft(ntm_inputs, 0, hidden / 2) * ft(ntm_inputs, hidden / 2, hidden);
+                        let hl1 = stm_hidden.concat(ntm_hidden);
+                        let hl2 = l1.forward(hl1).select(output_buckets).screlu();
+                        let hl3 = l2.forward(hl2).select(output_buckets).screlu();
+                        l3.forward(hl3).select(output_buckets)
+                    });
+                if $factorised {
+                    // Merged weights must still fit the quantisation range.
+                    let clip = AdamWParams { max_weight: 0.99, min_weight: -0.99, ..Default::default() };
+                    trainer.optimiser.set_params_for_weight("l0w", clip);
+                    trainer.optimiser.set_params_for_weight("l0f", clip);
+                }
+                // Reference evaluations for checking the engine's inference: trainer <id> <data> <checkpoint-dir> ... ml eval=<fen file>
+                if let Some(fens) = args.get(9).and_then(|a| a.strip_prefix("eval=")) {
+                    trainer.load_from_checkpoint(&out);
+                    for fen in std::fs::read_to_string(fens).expect("fen file").lines().filter(|l| !l.trim().is_empty()) {
+                        println!("{:.2}\t{fen}", trainer.eval(fen.trim()));
+                    }
+                    return;
+                }
+                trainer.run(&schedule, &settings, &data_loader);
+                return;
+            }};
         }
-        trainer.run(&schedule, &settings, &data_loader);
-        return;
+        if kb {
+            ml_trainer!(ChessBucketsMirrored::new(KING_BUCKETS_4), true);
+        } else {
+            ml_trainer!(Chess768, false);
+        }
     }
     if inputs == "kb10" || inputs == "kb4" {
         assert_eq!(buckets, 1, "king buckets are only set up with a single output bucket");
