@@ -5,6 +5,7 @@ use crate::board::*;
 use crate::eval::evaluate;
 use crate::search::*;
 use crate::tt::TT;
+use crate::types::Move;
 use std::io::BufRead;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -160,27 +161,48 @@ impl Engine {
                 // Helpers search until the main thread is done (or the depth limit); only the
                 // main thread watches the clock and the node limit.
                 let helper_limits = Limits { depth: limits.depth, ..Limits::default() };
-                let running: Vec<JoinHandle<Box<Searcher>>> = helpers
+                let running: Vec<JoinHandle<(Box<Searcher>, Move, i32)>> = helpers
                     .into_iter()
                     .map(|mut h| {
                         let lim = helper_limits.clone();
                         std::thread::Builder::new()
                             .stack_size(SEARCH_STACK)
                             .spawn(move || {
-                                h.search(&board, &lim);
-                                h
+                                let (mv, score) = h.search(&board, &lim);
+                                (h, mv, score)
                             })
                             .unwrap()
                     })
                     .collect();
-                let (mv, _) = searcher.search(&board, &limits);
+                let (main_mv, main_score) = searcher.search(&board, &limits);
                 stop.store(true, Ordering::Relaxed);
-                if searcher.ponder_move.is_null() {
+                let done: Vec<(Box<Searcher>, Move, i32)> =
+                    running.into_iter().map(|j| j.join().expect("helper thread panicked")).collect();
+                // Thread voting: every thread that completed an iteration backs its best move, weighted by how
+                // deep it got and how well the move scored; the move with the most support is played.
+                let mut cands: Vec<(Move, i32, i32, Move)> = vec![(main_mv, main_score, searcher.completed_depth, searcher.ponder_move)];
+                for (h, mv, score) in &done {
+                    if h.completed_depth > 0 && !mv.is_null() {
+                        cands.push((*mv, *score, h.completed_depth, h.ponder_move));
+                    }
+                }
+                let min_score = cands.iter().map(|c| c.1).min().unwrap_or(0);
+                let vote = |mv: Move| -> i64 {
+                    cands.iter().filter(|c| c.0 == mv).map(|c| (c.1 - min_score + 14) as i64 * c.2 as i64).sum()
+                };
+                let mut best = 0;
+                for i in 1..cands.len() {
+                    if vote(cands[i].0) > vote(cands[best].0) {
+                        best = i;
+                    }
+                }
+                let (mv, ponder) = (cands[best].0, cands[best].3);
+                if ponder.is_null() {
                     println!("bestmove {mv}");
                 } else {
-                    println!("bestmove {mv} ponder {}", searcher.ponder_move);
+                    println!("bestmove {mv} ponder {ponder}");
                 }
-                let helpers = running.into_iter().map(|j| j.join().expect("helper thread panicked")).collect();
+                let helpers = done.into_iter().map(|(h, _, _)| h).collect();
                 (searcher, helpers)
             })
             .unwrap();

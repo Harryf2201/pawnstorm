@@ -140,6 +140,8 @@ pub struct Searcher {
     /// False for the extra Lazy-SMP threads: they search the same position to fill the shared
     /// hash table, while the main thread alone ages the table, manages time and picks the move.
     pub main_thread: bool,
+    /// Depth of the last fully completed iteration of the latest search (for thread voting).
+    pub completed_depth: i32,
     /// Set while pondering (thinking on the opponent's time): the clock is ignored until "ponderhit"
     /// clears it, and the time budget then counts from that moment.
     pub ponder: Arc<AtomicBool>,
@@ -262,6 +264,7 @@ impl Searcher {
             stopped: false,
             print: true,
             main_thread: true,
+            completed_depth: 0,
             overhead_ms: 10,
             ponder: Arc::new(AtomicBool::new(false)),
             pondering: false,
@@ -504,6 +507,7 @@ impl Searcher {
         self.setup_time(limits, board.stm);
         self.pondering = self.main_thread && self.ponder.load(Ordering::Relaxed);
         self.ponder_move = Move::NULL;
+        self.completed_depth = 0;
         if self.main_thread {
             self.tt.new_search();
         }
@@ -585,6 +589,7 @@ impl Searcher {
                 break;
             }
             best_score = score;
+            self.completed_depth = depth;
             if self.print {
                 let ms = self.elapsed_ms();
                 let pv: Vec<String> = self.pv[0][..self.pv_len[0]].iter().map(|m| m.to_uci()).collect();
