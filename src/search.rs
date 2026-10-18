@@ -33,6 +33,55 @@ pub struct Limits {
     pub infinite: bool,
 }
 
+#[cfg(test)]
+mod tt_eval_tests {
+    use super::*;
+
+    fn position() -> (Board, Searcher) {
+        crate::attacks::init();
+        let b = Board::from_fen("7k/8/8/8/8/8/8/1Q5K w - - 80 1").unwrap();
+        let mut s = Searcher::new(Arc::new(TT::new(1)), Arc::new(AtomicBool::new(false)));
+        s.print = false;
+        s.hashes.push(b.hash);
+        if nnue::active() { nnue::refresh(&b, &mut s.acc[1]); }
+        (b, s)
+    }
+
+    #[test]
+    fn cached_eval_uses_current_halfmove_clock() {
+        let (b, mut s) = position();
+        // Force a raw static eval into the TT; the upper bound cannot cut this window.
+        s.tt.store(b.hash, Move::NULL, -1000, 1000, 0, BOUND_UPPER, false);
+        assert_eq!(s.qsearch(&b, 500, 600, 1), 600);
+    }
+
+    #[test]
+    fn stored_eval_is_independent_of_halfmove_clock() {
+        let (late, mut s) = position();
+        let expected = if nnue::active() {
+            nnue::evaluate(&s.acc[1], late.stm, late.occ().count_ones())
+        } else { evaluate(&late) }.clamp(-MATE_BOUND + 1, MATE_BOUND - 1);
+        s.qsearch(&late, -INF, INF, 1);
+        assert_eq!(s.tt.probe(late.hash).unwrap().eval, expected);
+        let mut early = late;
+        early.halfmove = 0;
+        let warm = s.qsearch(&early, -INF, INF, 1);
+        s.tt.clear();
+        let cold = s.qsearch(&early, -INF, INF, 1);
+        assert_eq!(warm, cold);
+    }
+
+    #[test]
+    fn correction_history_does_not_learn_halfmove_scaling() {
+        let (b, mut s) = position();
+        assert_eq!(s.corrected(&b, 1000, 1), 600);
+        s.update_corr(&b, 1000, 600, 8, 1);
+        assert_eq!(s.corr[b.stm][pawn_key(&b)], 0);
+        assert_eq!(s.np_corr[b.stm][WHITE][non_pawn_key(&b, WHITE)], 0);
+        assert_eq!(s.np_corr[b.stm][BLACK][non_pawn_key(&b, BLACK)], 0);
+    }
+}
+
 #[derive(Clone, Copy)]
 struct PlyInfo {
     static_eval: i32,
@@ -252,12 +301,12 @@ impl Searcher {
         if let Some(k) = self.cont_key(ply) {
             c += self.cont_corr[s][k] * p(P::CorrContW);
         }
-        (raw + c / (CORR_GRAIN * 256)).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+        (Self::fade_eval(b, raw) + c / (CORR_GRAIN * 256)).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
     /// Moves every correction for this position towards (search score - raw static eval).
     fn update_corr(&mut self, b: &Board, raw: i32, score: i32, depth: i32, ply: usize) {
-        let diff = (score - raw) * CORR_GRAIN;
+        let diff = (score - Self::fade_eval(b, raw)) * CORR_GRAIN;
         let w = (depth + 1).min(16);
         let upd = |e: &mut i32| *e = ((*e * (CORR_WEIGHT_SCALE - w) + diff * w) / CORR_WEIGHT_SCALE).clamp(-CORR_MAX, CORR_MAX);
         let s = b.stm;
@@ -325,11 +374,19 @@ impl Searcher {
         false
     }
 
-    fn eval(&self, b: &Board, ply: usize) -> i32 {
+    /// TT static evaluations must not depend on the halfmove clock (not in the key).
+    fn raw_eval(&self, b: &Board, ply: usize) -> i32 {
         let e = if nnue::active() { nnue::evaluate(&self.acc[ply], b.stm, b.occ().count_ones()) } else { evaluate(b) };
-        // Fade the eval towards a draw as the 50-move rule approaches.
-        let e = e * (200 - b.halfmove.min(100) as i32) / 200;
         e.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+    }
+
+    fn fade_eval(b: &Board, raw: i32) -> i32 {
+        // Fade the eval towards a draw as the 50-move rule approaches.
+        raw * (200 - b.halfmove.min(100) as i32) / 200
+    }
+
+    fn eval(&self, b: &Board, ply: usize) -> i32 {
+        Self::fade_eval(b, self.raw_eval(b, ply))
     }
 
     /// Fills the accumulators for ply + 1 after `mv` is played from `b` at `ply`.
@@ -481,7 +538,22 @@ impl Searcher {
             return (mv, score);
         }
         let mut best_score = 0;
-        let max_depth = limits.depth.unwrap_or(MAX_PLY as i32 - 4).clamp(1, MAX_PLY as i32 - 4);
+        let mut max_depth = limits.depth.unwrap_or(MAX_PLY as i32 - 4).clamp(1, MAX_PLY as i32 - 4);
+        // With only one legal move, reserve clock time for a later decision. Do
+        // a small search for a score/PV, preserving explicit analysis budgets,
+        // pondering, infinite searches and node-limited self-play generation.
+        let forced_depth = p(P::TmForcedDepth);
+        if forced_depth > 0
+            && legal.len() == 1
+            && self.clock_tm
+            && !self.pondering
+            && !limits.infinite
+            && limits.depth.is_none()
+            && limits.nodes.is_none()
+            && limits.soft_nodes.is_none()
+        {
+            max_depth = max_depth.min(forced_depth);
+        }
         let mut score = 0;
         // Iterations in a row the best move has stayed the same.
         let mut stable = 0usize;
@@ -647,7 +719,7 @@ impl Searcher {
         } else {
             raw_eval = match tt_entry {
                 Some(e) if e.eval > -MATE_BOUND => e.eval,
-                _ => self.eval(b, ply),
+                _ => self.raw_eval(b, ply),
             };
             static_eval = self.corrected(b, raw_eval, ply);
             eval = static_eval;
@@ -985,7 +1057,7 @@ impl Searcher {
         } else {
             raw_eval = match tt_entry {
                 Some(e) if e.eval > -MATE_BOUND => e.eval,
-                _ => self.eval(b, ply),
+                _ => self.raw_eval(b, ply),
             };
             best = self.corrected(b, raw_eval, ply);
             if best >= beta {
