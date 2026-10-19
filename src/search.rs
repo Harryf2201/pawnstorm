@@ -143,6 +143,8 @@ pub struct Searcher {
     /// False for the extra Lazy-SMP threads: they search the same position to fill the shared
     /// hash table, while the main thread alone ages the table, manages time and picks the move.
     pub main_thread: bool,
+    /// Sprint 3: null-move pruning is off below this ply while a null-move verification search runs.
+    nmp_min_ply: usize,
     /// Set while pondering (thinking on the opponent's time): the clock is ignored until "ponderhit"
     /// clears it, and the time budget then counts from that moment.
     pub ponder: Arc<AtomicBool>,
@@ -283,6 +285,7 @@ impl Searcher {
             stopped: false,
             print: true,
             main_thread: true,
+            nmp_min_ply: 0,
             overhead_ms: 10,
             ponder: Arc::new(AtomicBool::new(false)),
             pondering: false,
@@ -755,6 +758,8 @@ impl Searcher {
         // by the correction history (what pruning decisions use).
         let raw_eval;
         let static_eval;
+        // Sprint 3: how far the correction histories moved the network's eval here (unreliable eval = large).
+        let mut corr_mag = 0;
         let mut eval;
         if in_check {
             raw_eval = NO_EVAL;
@@ -770,6 +775,7 @@ impl Searcher {
                 _ => self.raw_eval(b, ply),
             };
             static_eval = self.corrected(b, raw_eval, ply);
+            corr_mag = (static_eval - Self::fade_eval(b, raw_eval)).abs();
             eval = static_eval;
             // A TT score is a better estimate than the static eval when its bound allows it.
             if let Some(e) = tt_entry {
@@ -809,6 +815,7 @@ impl Searcher {
                 && ply >= 1
                 && self.stack[ply - 1].cont != NO_CONT
                 && b.has_non_pawn_material(b.stm)
+                && ply >= self.nmp_min_ply
             {
                 let r = p(P::NmpBase) + depth / p(P::NmpDepthDiv) + ((eval - beta) / p(P::NmpEvalDiv)).min(3);
                 let mut nb = *b;
@@ -822,7 +829,24 @@ impl Searcher {
                     return 0;
                 }
                 if s >= beta {
-                    return if s >= MATE_BOUND { beta } else { s };
+                    // Sprint: at high depth, confirm the cutoff with a normal reduced search that may not
+                    // use null moves for a few plies (protects against zugzwang).
+                    let vd = p(P::SprNmpVerify);
+                    if vd > 0 && depth >= vd && self.nmp_min_ply == 0 {
+                        self.nmp_min_ply = ply + (3 * (depth - r) / 4).max(1) as usize;
+                        let v = self.negamax(b, depth - r, beta - 1, beta, ply, false);
+                        self.nmp_min_ply = 0;
+                        if self.stopped {
+                            return 0;
+                        }
+                        if v < beta {
+                            // Not confirmed: fall through to the normal search.
+                        } else {
+                            return if s >= MATE_BOUND { beta } else { s };
+                        }
+                    } else {
+                        return if s >= MATE_BOUND { beta } else { s };
+                    }
                 }
             }
             // ProbCut: a good capture that beats beta by a margin in a reduced search almost
@@ -978,6 +1002,9 @@ impl Searcher {
                     r += (is_quiet && !tt_move.is_null() && tt_move.is_capture()) as i32 * p(P::SprTtCaptLmr);
                     r += !improving as i32;
                     r -= nb.in_check() as i32;
+                    if is_quiet && p(P::SprCorrLmr) > 0 {
+                        r -= (corr_mag / p(P::SprCorrLmr)).min(2);
+                    }
                     if is_quiet {
                         if scores[i] >= 2_000_000 {
                             r -= 1; // killer
