@@ -97,10 +97,18 @@ pub fn init() {
 }
 
 /// Loads a network from disk (UCI option EvalFile). Not safe to call during a search.
+/// A loaded network is never freed (searches hold references to it), so loading the same file again
+/// (GUIs and match runners resend options before every game) is skipped instead of leaking a copy.
 pub fn load_file(path: &str) -> Result<(), String> {
+    static LOADED: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    let mut loaded = LOADED.lock().unwrap();
+    if *loaded == path && active() {
+        return Ok(());
+    }
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     let net = from_bytes(&bytes)?;
     set_net(net);
+    *loaded = path.to_string();
     Ok(())
 }
 
