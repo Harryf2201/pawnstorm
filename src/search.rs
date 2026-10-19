@@ -701,6 +701,10 @@ impl Searcher {
         self.pv_len[ply] = ply;
 
         if depth <= 0 {
+            // Sprint 7: leaves that are draws score as draws (the checks below are skipped at depth 0).
+            if p(P::SprQsDraw) > 0 && !root && (b.is_insufficient_material() || self.is_repetition(b) || (b.halfmove >= 100 && !b.in_check())) {
+                return 0;
+            }
             return self.qsearch(b, alpha, beta, ply);
         }
         if self.nodes & 2047 == 0 {
@@ -952,6 +956,9 @@ impl Searcher {
         // Internal iterative reduction: no TT move means this node was never searched well.
         if depth >= 4 && tt_move.is_null() && (pv_node || cut_node) && excluded.is_null() {
             depth -= 1;
+        } else if p(P::SprAllIir) > 0 && depth >= p(P::SprAllIir) && tt_move.is_null() && !pv_node && !cut_node && !in_check && excluded.is_null() {
+            // Sprint 7: the same for all-nodes.
+            depth -= 1;
         }
 
         let threats = b.threats(b.stm ^ 1);
@@ -1061,7 +1068,8 @@ impl Searcher {
             nb.make_move(mv);
             self.tt.prefetch(nb.hash);
             self.nnue_update(b, mv, ply);
-            if ext == 0 && nb.in_check() {
+            // (Sprint 7: optionally not for quiet checks that lose material.)
+            if ext == 0 && nb.in_check() && (p(P::SprCheckSee) == 0 || !is_quiet || b.see(mv, 0)) {
                 ext = 1;
             }
             self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
@@ -1094,6 +1102,9 @@ impl Searcher {
                     if is_quiet {
                         if scores[i] >= 2_000_000 {
                             r -= 1; // killer
+                            if p(P::SprKillerHist) > 0 {
+                                r -= (self.quiet_history(b, mv, ply, threats) / p(P::LmrHistDiv)).clamp(-2, 2);
+                            }
                         } else {
                             r -= (scores[i] / p(P::LmrHistDiv)).clamp(-2, 2);
                         }
@@ -1220,6 +1231,9 @@ impl Searcher {
         if ply >= MAX_PLY - 1 {
             return if in_check { 0 } else { self.eval(b, ply) };
         }
+        if p(P::SprQsDraw) > 0 && b.is_insufficient_material() {
+            return 0;
+        }
         let pv_node = beta - alpha > 1;
 
         let tt_entry = self.tt.probe(b.hash);
@@ -1268,7 +1282,8 @@ impl Searcher {
                 if !b.see(mv, 0) {
                     continue;
                 }
-                if futility <= alpha && !b.see(mv, 1) {
+                // (Sprint 7: SEE never credits a promotion or en passant, so those can skip this.)
+                if futility <= alpha && !(p(P::SprQsSpecial) > 0 && (mv.is_promo() || mv.is_ep())) && !b.see(mv, 1) {
                     best = best.max(futility);
                     continue;
                 }

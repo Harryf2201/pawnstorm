@@ -70,6 +70,13 @@ params! {
     // Search sprint 6: each 0 = off.
     SprEvalHist2 = 0, 0, 8;
     SprTmDrop = 0, 0, 800;
+    // Search sprint 7 (Codex code review): each 0 = off.
+    SprQsDraw = 0, 0, 1;
+    SprQsSpecial = 0, 0, 1;
+    SprKillerHist = 0, 0, 1;
+    SprTtAge = 0, 0, 16;
+    SprCheckSee = 0, 0, 1;
+    SprAllIir = 0, 0, 12;
 }
 
 static mut GENERATION: u32 = 0;

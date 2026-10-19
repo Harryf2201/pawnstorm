@@ -2,6 +2,7 @@
 //! Each entry is two atomics: `key ^ data` and `data`, so a torn write is detected on probe.
 
 use crate::types::Move;
+use crate::params::{p, P};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
 
 pub const BOUND_NONE: u8 = 0;
@@ -105,7 +106,13 @@ impl TT {
         }
         let old_depth = ((old_data >> 48) & 0xFF) as i32;
         let old_age = ((old_data >> 58) & 31) as u8;
-        if !same || bound == BOUND_EXACT || depth + 4 > old_depth || old_age != age {
+        // Sprint 7 (SprTtAge > 0): a different position only replaces an empty slot, or a deep entry once it is
+        // shallow enough relative to its age.
+        let keep_other = p(P::SprTtAge) > 0
+            && !same
+            && (old_data >> 56) & 3 != 0
+            && depth + 4 + p(P::SprTtAge) * ((age as i32 - old_age as i32).rem_euclid(32)) <= old_depth;
+        if !keep_other && (!same || bound == BOUND_EXACT || depth + 4 > old_depth || old_age != age) {
             let data = pack(mv, score, eval, depth, bound, age, pv);
             e.data.store(data, Relaxed);
             e.key.store(key ^ data, Relaxed);
