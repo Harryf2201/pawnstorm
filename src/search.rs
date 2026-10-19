@@ -85,6 +85,8 @@ mod tt_eval_tests {
 #[derive(Clone, Copy)]
 struct PlyInfo {
     static_eval: i32,
+    /// Sprint 6: the network eval (faded, before correction) at this ply, or NO_EVAL.
+    raw_fade: i32,
     /// piece * 64 + to of the move played at this ply (for continuation history), or NO_CONT.
     cont: usize,
     excluded: Move,
@@ -98,7 +100,7 @@ struct PlyInfo {
 
 impl Default for PlyInfo {
     fn default() -> Self {
-        PlyInfo { static_eval: NO_EVAL, cont: NO_CONT, excluded: Move::NULL, reduction: 0, quiet: None, cutoffs: 0 }
+        PlyInfo { static_eval: NO_EVAL, raw_fade: NO_EVAL, cont: NO_CONT, excluded: Move::NULL, reduction: 0, quiet: None, cutoffs: 0 }
     }
 }
 
@@ -633,6 +635,7 @@ impl Searcher {
             if self.stopped {
                 break;
             }
+            let last_score = best_score;
             best_score = score;
             if self.print {
                 let ms = self.elapsed_ms();
@@ -658,6 +661,11 @@ impl Searcher {
                 let frac = self.root_nodes[best_move.from()][best_move.to()] as f64 / self.nodes as f64;
                 let stab = [1.5, 1.25, 1.1, 1.0, 0.95, 0.9, 0.85][stable];
                 soft = ((soft as f64 * (1.5 - frac) * 1.35 * stab) as u64).min(self.hard_ms);
+                // Sprint 6: more time when the score has just dropped.
+                if p(P::SprTmDrop) > 0 && last_score.abs() < MATE_BOUND && score.abs() < MATE_BOUND {
+                    let f = 1.0 + ((last_score - score) as f64 / p(P::SprTmDrop) as f64).clamp(0.0, 0.5);
+                    soft = ((soft as f64 * f) as u64).min(self.hard_ms);
+                }
             }
             self.check_time();
             if self.stopped {
@@ -815,6 +823,17 @@ impl Searcher {
             }
             if prior_r >= 1 && depth >= 2 && both > 175 {
                 depth -= 1;
+            }
+        }
+        if excluded.is_null() {
+            self.stack[ply].raw_fade = if raw_eval == NO_EVAL { NO_EVAL } else { Self::fade_eval(b, raw_eval) };
+        }
+        // Sprint 6: a weaker, symmetric version: the change in the network eval (no correction) after the parent's
+        // quiet move, once per move tried.
+        if p(P::SprEvalHist2) > 0 && !in_check && excluded.is_null() && ply >= 1 && self.stack[ply - 1].raw_fade != NO_EVAL && self.stack[ply].raw_fade != NO_EVAL {
+            if let Some((m, tf, tt)) = self.stack[ply - 1].quiet.take() {
+                let sum = self.stack[ply - 1].raw_fade + self.stack[ply].raw_fade;
+                gravity(&mut self.butterfly[b.stm ^ 1][tf][tt][m.from()][m.to()], (-sum * p(P::SprEvalHist2)).clamp(-256, 256));
             }
         }
         // Sprint 5: the static eval change after the parent's quiet move feeds back into its history.

@@ -67,6 +67,9 @@ params! {
     SprEvalHist = 0, 0, 20;
     SprTtProbcut = 0, 0, 800;
     SprCutCnt = 0, 0, 2;
+    // Search sprint 6: each 0 = off.
+    SprEvalHist2 = 0, 0, 8;
+    SprTmDrop = 0, 0, 800;
 }
 
 static mut GENERATION: u32 = 0;
