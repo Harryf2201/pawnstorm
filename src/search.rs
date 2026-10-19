@@ -863,6 +863,7 @@ impl Searcher {
                 nb.make_null();
                 self.acc[ply + 1] = self.acc[ply];
                 self.stack[ply].cont = NO_CONT;
+                self.stack[ply].quiet = None;
                 self.hashes.push(nb.hash);
                 let s = -self.negamax(&nb, depth - r, -beta, -beta + 1, ply + 1, !cut_node);
                 self.hashes.pop();
@@ -911,6 +912,7 @@ impl Searcher {
                     self.tt.prefetch(nb.hash);
                     self.nnue_update(b, mv, ply);
                     self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
+                    self.stack[ply].quiet = None;
                     self.hashes.push(nb.hash);
                     let mut s = -self.qsearch(&nb, -pc_beta, -pc_beta + 1, ply + 1);
                     if s >= pc_beta {
