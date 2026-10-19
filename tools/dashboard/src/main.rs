@@ -193,6 +193,8 @@ struct Game {
     duration: String,
     /// When the game ended (Unix seconds, from GameEndTime), 0 if unknown.
     end: u64,
+    /// GameStartTime as written in the PGN (with the players, it identifies a game for exclude.txt).
+    start: String,
 }
 
 #[derive(Default)]
@@ -224,6 +226,7 @@ impl PgnParser {
                     "PlyCount" => self.cur.plies = v.parse().unwrap_or(0),
                     "GameDuration" => self.cur.duration = v,
                     "GameEndTime" => self.cur.end = parse_pgn_time(&v),
+                    "GameStartTime" => self.cur.start = v,
                     _ => {}
                 }
             }
@@ -289,6 +292,10 @@ struct RunState {
     last_activity: u64,
     /// (rating, ±95% error, derived from an earlier run's rating rather than a fixed anchor)
     rating: Option<(f64, f64, bool)>,
+    /// Games to leave out (exclude.txt: "GameStartTime|White|Black" per line), read once at startup, e.g.
+    /// games spoiled by a lab pause; their replays live in replay/*.pgn.
+    excluded: Option<std::collections::HashSet<String>>,
+    replay: BTreeMap<String, (Tail, PgnParser)>,
 }
 
 /// "LLR: -0.00 (-0.1%) (-2.94, 2.94) [0.00, 5.00]" -> [llr, lower bound, upper bound, elo0, elo1].
@@ -323,8 +330,34 @@ impl RunState {
             self.meta = m;
         }
         let t = now();
+        if self.excluded.is_none() {
+            self.excluded = Some(std::fs::read_to_string(dir.join("exclude.txt")).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect());
+        }
+        let before = self.games.len();
         for line in self.pgn_tail.read_new(&dir.join("games.pgn")) {
             self.pgn.feed(&line, &mut self.games);
+        }
+        if let Some(ex) = self.excluded.as_ref().filter(|e| !e.is_empty()) {
+            let mut i = before;
+            while i < self.games.len() {
+                let g = &self.games[i];
+                if ex.contains(&format!("{}|{}|{}", g.start, g.white, g.black)) {
+                    self.games.remove(i);
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        if let Ok(rd) = std::fs::read_dir(dir.join("replay")) {
+            let mut files: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "pgn")).collect();
+            files.sort();
+            for f in files {
+                let key = f.file_name().unwrap().to_string_lossy().to_string();
+                let (tail, parser) = self.replay.entry(key).or_default();
+                for line in tail.read_new(&f) {
+                    parser.feed(&line, &mut self.games);
+                }
+            }
         }
         for line in self.log_tail.read_recent(&dir.join("engine.log"), 32 << 20) {
             self.feed_log(&line, t);
