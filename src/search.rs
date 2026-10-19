@@ -88,11 +88,13 @@ struct PlyInfo {
     /// piece * 64 + to of the move played at this ply (for continuation history), or NO_CONT.
     cont: usize,
     excluded: Move,
+    /// Reduction applied to the move searched from this ply (for hindsight depth adjustment at the child).
+    reduction: i32,
 }
 
 impl Default for PlyInfo {
     fn default() -> Self {
-        PlyInfo { static_eval: NO_EVAL, cont: NO_CONT, excluded: Move::NULL }
+        PlyInfo { static_eval: NO_EVAL, cont: NO_CONT, excluded: Move::NULL, reduction: 0 }
     }
 }
 
@@ -794,6 +796,17 @@ impl Searcher {
             && ply >= 2
             && self.stack[ply - 2].static_eval != NO_EVAL
             && static_eval > self.stack[ply - 2].static_eval;
+        // Sprint: hindsight depth adjustment from the reduction of the move that led here and how the evals moved.
+        if p(P::SprHindsight) > 0 && !in_check && excluded.is_null() && ply >= 1 && self.stack[ply - 1].static_eval != NO_EVAL {
+            let prior_r = self.stack[ply - 1].reduction;
+            let both = static_eval + self.stack[ply - 1].static_eval;
+            if prior_r >= 3 && both <= 2 {
+                depth += 1;
+            }
+            if prior_r >= 1 && depth >= 2 && both > 175 {
+                depth -= 1;
+            }
+        }
         self.killers[ply + 1] = [Move::NULL; 2];
 
         if !pv_node && !in_check && excluded.is_null() {
@@ -950,6 +963,12 @@ impl Searcher {
                         continue;
                     }
                 } else {
+                    // Sprint: capture futility: even winning the captured piece cannot reach alpha.
+                    if p(P::SprCaptFut) > 0 && !in_check && depth <= 6 && mv.is_capture() && !mv.is_promo()
+                        && static_eval + 100 + p(P::SprCaptFut) * depth + crate::board::SEE_VAL[Self::captured_type(b, mv)] <= alpha
+                    {
+                        continue;
+                    }
                     // Sprint: captures with a good history get more leeway before SEE pruning.
                     let ch = if p(P::SprCaptSeeDiv) > 0 && mv.is_capture() {
                         self.capt_hist[b.mailbox[mv.from()] as usize][mv.to()][Self::captured_type(b, mv)] / p(P::SprCaptSeeDiv)
@@ -1028,7 +1047,9 @@ impl Searcher {
                     }
                     r = r.clamp(0, (new_depth - 1).max(0));
                 }
+                self.stack[ply].reduction = r;
                 let mut s = -self.negamax(&nb, new_depth - r, -alpha - 1, -alpha, ply + 1, true);
+                self.stack[ply].reduction = 0;
                 if s > alpha && r > 0 {
                     // The reduced search beat alpha: re-search a little deeper if it did so by a lot,
                     // shallower if only just.

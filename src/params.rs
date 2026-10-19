@@ -60,6 +60,9 @@ params! {
     SprNmpVerify = 0, 0, 20;
     SprCorrLmr = 0, 0, 512;
     SprLazyScore = 0, 0, 1;
+    // Search sprint 4: each 0 = off.
+    SprHindsight = 0, 0, 1;
+    SprCaptFut = 0, 0, 400;
 }
 
 static mut GENERATION: u32 = 0;
