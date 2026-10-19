@@ -126,6 +126,11 @@ pub struct Searcher {
     cont_corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// NNUE accumulators per ply.
     acc: Vec<AccPair>,
+    /// Threat features' contribution per ply (nnue::threat_acc), the threat set it was made for, and whether
+    /// it is up to date for the position at that ply (a child is built from its parent's when that is).
+    tacc: Vec<AccPair>,
+    tset: Vec<nnue::ThreatSet>,
+    tvalid: Vec<bool>,
     /// Nodes spent below each root move (from, to) in this search, for time management.
     root_nodes: Box<[[u64; 64]; 64]>,
     /// Whether the soft limit comes from a game clock (and may be stretched or shortened).
@@ -253,6 +258,9 @@ impl Searcher {
             np_corr: vec![[[0i32; CORR_SIZE]; 2]; 2].into_boxed_slice().try_into().unwrap(),
             cont_corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             acc: vec![[Accumulator { vals: [0; nnue::HIDDEN] }; 2]; MAX_PLY + 8],
+            tacc: vec![[Accumulator { vals: [0; nnue::HIDDEN] }; 2]; MAX_PLY + 8],
+            tset: vec![[0; 12]; MAX_PLY + 8],
+            tvalid: vec![false; MAX_PLY + 8],
             root_nodes: Box::new([[0; 64]; 64]),
             clock_tm: false,
             start: Instant::now(),
@@ -375,8 +383,21 @@ impl Searcher {
     }
 
     /// TT static evaluations must not depend on the halfmove clock (not in the key).
-    fn raw_eval(&self, b: &Board, ply: usize) -> i32 {
-        let e = if nnue::active() { nnue::evaluate(&self.acc[ply], b) } else { evaluate(b) };
+    fn raw_eval(&mut self, b: &Board, ply: usize) -> i32 {
+        let e = if nnue::active() {
+            let set = nnue::threat_set(b);
+            let (lo, hi) = self.tacc.split_at_mut(ply);
+            // The nearest ancestor on this path whose threat part is up to date (the update is a set difference, so it
+            // works across several moves); otherwise from scratch.
+            let anc = (ply.saturating_sub(6)..ply).rev().find(|&k| self.tvalid[k]);
+            let parent = anc.map(|k| (&lo[k], &self.tset[k]));
+            nnue::threat_acc(&set, parent, &mut hi[0]);
+            self.tset[ply] = set;
+            self.tvalid[ply] = true;
+            nnue::evaluate_with(&self.acc[ply], &self.tacc[ply], b)
+        } else {
+            evaluate(b)
+        };
         e.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
@@ -385,7 +406,7 @@ impl Searcher {
         raw * (200 - b.halfmove.min(100) as i32) / 200
     }
 
-    fn eval(&self, b: &Board, ply: usize) -> i32 {
+    fn eval(&mut self, b: &Board, ply: usize) -> i32 {
         Self::fade_eval(b, self.raw_eval(b, ply))
     }
 
@@ -395,6 +416,7 @@ impl Searcher {
         if nnue::active() {
             let (parent, child) = self.acc.split_at_mut(ply + 1);
             nnue::update(b, mv, &parent[ply], &mut child[0]);
+            self.tvalid[ply + 1] = false;
         }
     }
 
@@ -519,6 +541,7 @@ impl Searcher {
         }
         if nnue::active() {
             nnue::refresh(board, &mut self.acc[0]);
+            self.tvalid[0] = false;
         }
 
         let legal = board.legal_moves();
@@ -766,6 +789,7 @@ impl Searcher {
                 let mut nb = *b;
                 nb.make_null();
                 self.acc[ply + 1] = self.acc[ply];
+                self.tvalid[ply + 1] = false;
                 self.stack[ply].cont = NO_CONT;
                 self.hashes.push(nb.hash);
                 let s = -self.negamax(&nb, depth - r, -beta, -beta + 1, ply + 1, !cut_node);

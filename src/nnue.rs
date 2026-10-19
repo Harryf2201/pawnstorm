@@ -375,26 +375,73 @@ fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
 
 /// Evaluation in centipawns from the side to move's point of view.
 /// `pieces` = number of pieces on the board (both colors, kings included), which picks the bucket.
-pub fn evaluate(acc: &AccPair, b: &Board) -> i32 {
-    let net = net();
-    let (stm, pieces) = (b.stm, b.occ().count_ones());
-    // Threat inputs: the feature rows of every piece attacked by the other side, per perspective; they are
-    // added on the fly in pairwise_threat.
-    let first = &net.feature_weights[0].vals;
-    let mut rows: [[&[i16; HIDDEN]; 32]; 2] = [[first; 32]; 2];
-    let mut n = 0;
+/// Attacked pieces by piece (color * 6 + type): the active threat features of a position.
+pub type ThreatSet = [u64; 12];
+
+pub fn threat_set(b: &Board) -> ThreatSet {
+    let mut s = [0u64; 12];
     for c in 0..2 {
-        let mut bb = b.colors[c] & b.threats(c ^ 1);
-        while bb != 0 && n < 32 {
-            let sq = bb.trailing_zeros() as usize;
-            let pc = b.mailbox[sq] as usize;
-            for (persp, r) in rows.iter_mut().enumerate() {
-                r[n] = &net.feature_weights[768 + feature(persp, pc, sq)].vals;
-            }
-            n += 1;
-            bb &= bb - 1;
+        let att = b.colors[c] & b.threats(c ^ 1);
+        for pt in 0..6 {
+            s[c * 6 + pt] = b.pieces[pt] & att;
         }
     }
+    s
+}
+
+/// The threat features' contribution to the first layer (no bias): from the parent position's contribution
+/// and threat set when given, by adding and removing only the features that changed; otherwise from zero.
+pub fn threat_acc(set: &ThreatSet, parent: Option<(&AccPair, &ThreatSet)>, out: &mut AccPair) {
+    let net = net();
+    let empty = [0u64; 12];
+    let pset = match parent {
+        Some((pacc, pset)) => {
+            *out = *pacc;
+            pset
+        }
+        None => {
+            *out = [Accumulator { vals: [0; HIDDEN] }; 2];
+            &empty
+        }
+    };
+    for pc in 0..12 {
+        let (mut add, mut sub) = (set[pc] & !pset[pc], pset[pc] & !set[pc]);
+        while add != 0 {
+            let sq = add.trailing_zeros() as usize;
+            for (persp, a) in out.iter_mut().enumerate() {
+                let w = &net.feature_weights[768 + feature(persp, pc, sq)].vals;
+                for (v, d) in a.vals.iter_mut().zip(w) {
+                    *v = v.wrapping_add(*d);
+                }
+            }
+            add &= add - 1;
+        }
+        while sub != 0 {
+            let sq = sub.trailing_zeros() as usize;
+            for (persp, a) in out.iter_mut().enumerate() {
+                let w = &net.feature_weights[768 + feature(persp, pc, sq)].vals;
+                for (v, d) in a.vals.iter_mut().zip(w) {
+                    *v = v.wrapping_sub(*d);
+                }
+            }
+            sub &= sub - 1;
+        }
+    }
+}
+
+/// Evaluation from scratch of the threat part (for the "eval" command and tests).
+pub fn evaluate(acc: &AccPair, b: &Board) -> i32 {
+    let mut t = [Accumulator { vals: [0; HIDDEN] }; 2];
+    threat_acc(&threat_set(b), None, &mut t);
+    evaluate_with(acc, &t, b)
+}
+
+/// Evaluation from the ordinary accumulators plus the threat features' contribution `tacc`.
+pub fn evaluate_with(acc: &AccPair, tacc: &AccPair, b: &Board) -> i32 {
+    let net = net();
+    let (stm, pieces) = (b.stm, b.occ().count_ones());
+    let rows: [[&[i16; HIDDEN]; 1]; 2] = [[&tacc[0].vals], [&tacc[1].vals]];
+    let n = 1;
     // Same rule as bullet's MaterialCount<N>: (pieces - 2) / ceil(32 / N).
     let bucket = ((pieces.saturating_sub(2)) as usize / 32usize.div_ceil(OUTPUT_BUCKETS)).min(OUTPUT_BUCKETS - 1);
     const HALF: usize = HIDDEN / 2;
