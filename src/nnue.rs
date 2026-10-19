@@ -18,8 +18,13 @@ const L2: usize = 32;
 const SCALE: f32 = 400.0;
 const QA: i32 = 255;
 
+/// Threat inputs (trainer -Inputs mlthr): 768 piece-square inputs plus 768 more that are active only for
+/// pieces attacked by the other side (Board::threats). Those are added at evaluation time, not tracked
+/// incrementally: usually only a few pieces are attacked.
+pub const THREAT_INPUTS: usize = 1536;
+
 /// Size of bullet's quantised output (it may be padded to a multiple of 64).
-pub const NET_BYTES: usize = (768 * HIDDEN + HIDDEN) * 2
+pub const NET_BYTES: usize = (THREAT_INPUTS * HIDDEN + HIDDEN) * 2
     + (HIDDEN * OUTPUT_BUCKETS * L1 + OUTPUT_BUCKETS * L1 + L1 * OUTPUT_BUCKETS * L2 + OUTPUT_BUCKETS * L2 + L2 * OUTPUT_BUCKETS + OUTPUT_BUCKETS) * 4;
 
 #[derive(Clone, Copy)]
@@ -30,7 +35,7 @@ pub struct Accumulator {
 
 #[repr(C)]
 pub struct Network {
-    feature_weights: [Accumulator; 768],
+    feature_weights: [Accumulator; THREAT_INPUTS],
     feature_bias: Accumulator,
     // bullet's native (input-major) layout: for each input, the outputs of every bucket in a row.
     l1w: [[[f32; L1]; OUTPUT_BUCKETS]; HIDDEN],
@@ -321,8 +326,26 @@ fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
 
 /// Evaluation in centipawns from the side to move's point of view.
 /// `pieces` = number of pieces on the board (both colors, kings included), which picks the bucket.
-pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
+pub fn evaluate(acc: &AccPair, b: &Board) -> i32 {
     let net = net();
+    let (stm, pieces) = (b.stm, b.occ().count_ones());
+    // Threat inputs: add the attacked-piece features to copies of the accumulators.
+    let mut ta = *acc;
+    for c in 0..2 {
+        let mut bb = b.colors[c] & b.threats(c ^ 1);
+        while bb != 0 {
+            let sq = bb.trailing_zeros() as usize;
+            let pc = b.mailbox[sq] as usize;
+            for (persp, a) in ta.iter_mut().enumerate() {
+                let w = &net.feature_weights[768 + feature(persp, pc, sq)].vals;
+                for (v, d) in a.vals.iter_mut().zip(w) {
+                    *v += *d;
+                }
+            }
+            bb &= bb - 1;
+        }
+    }
+    let acc = &ta;
     // Same rule as bullet's MaterialCount<N>: (pieces - 2) / ceil(32 / N).
     let bucket = ((pieces.saturating_sub(2)) as usize / 32usize.div_ceil(OUTPUT_BUCKETS)).min(OUTPUT_BUCKETS - 1);
     const HALF: usize = HIDDEN / 2;
@@ -416,5 +439,5 @@ mod tests {
 pub fn evaluate_board(b: &Board) -> i32 {
     let mut acc = [Accumulator { vals: [0; HIDDEN] }; 2];
     refresh(b, &mut acc);
-    evaluate(&acc, b.stm, b.occ().count_ones())
+    evaluate(&acc, b)
 }

@@ -59,7 +59,7 @@ mod tt_eval_tests {
     fn stored_eval_is_independent_of_halfmove_clock() {
         let (late, mut s) = position();
         let expected = if nnue::active() {
-            nnue::evaluate(&s.acc[1], late.stm, late.occ().count_ones())
+            nnue::evaluate(&s.acc[1], &late)
         } else { evaluate(&late) }.clamp(-MATE_BOUND + 1, MATE_BOUND - 1);
         s.qsearch(&late, -INF, INF, 1);
         assert_eq!(s.tt.probe(late.hash).unwrap().eval, expected);
@@ -376,7 +376,7 @@ impl Searcher {
 
     /// TT static evaluations must not depend on the halfmove clock (not in the key).
     fn raw_eval(&self, b: &Board, ply: usize) -> i32 {
-        let e = if nnue::active() { nnue::evaluate(&self.acc[ply], b.stm, b.occ().count_ones()) } else { evaluate(b) };
+        let e = if nnue::active() { nnue::evaluate(&self.acc[ply], b) } else { evaluate(b) };
         e.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
