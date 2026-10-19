@@ -20,6 +20,8 @@ param(
     [string]$Book = '8moves_v3.pgn',
     [string]$Sprt = '0,3',
     [int]$Hash = 16,
+    # Fixed nodes per move instead of a clock (with -TC inf): compares evaluation quality without speed.
+    [int]$Nodes = 0,
     [switch]$Live,
     # Gauntlet only: the first N engines each play every other engine, but not each other.
     [int]$Seeds = 1,
@@ -81,7 +83,7 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 
 $bookPath = "$Root\books\$Book"
 $format = if ($Book -like '*.epd') { 'epd' } else { 'pgn' }
-$fcArgs += '-each', "tc=$TC", "option.Hash=$Hash"
+$fcArgs += '-each', $(if ($Nodes -gt 0) { "nodes=$Nodes" } else { "tc=$TC" }), "option.Hash=$Hash"
 $fcArgs += '-openings', "file=$bookPath", "format=$format", 'order=random'
 $fcArgs += '-rounds', $Rounds, '-games', 2, '-repeat', '-concurrency', $Concurrency, '-recover'
 # Print results (incl. SPRT LLR) every 10 games so the dashboard can follow along.
