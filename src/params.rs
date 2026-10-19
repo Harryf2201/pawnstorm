@@ -43,6 +43,13 @@ params! {
     TtPvLmr = 1, 0, 2;
     DeeperMargin = 40, 10, 100;
     TmForcedDepth = 4, 0, 8;
+    // Search sprint 1 (Oct 19): each 0 = off.
+    SprFhDepth = 0, 0, 1;
+    SprCaptSeeDiv = 0, 0, 256;
+    SprCutNoTt = 0, 0, 2;
+    SprSeCutNeg = 0, 0, 2;
+    SprLmrRes = 0, 0, 128;
+    SprTtCaptLmr = 0, 0, 2;
 }
 
 static mut GENERATION: u32 = 0;

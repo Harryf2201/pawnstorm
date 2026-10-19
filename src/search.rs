@@ -863,8 +863,16 @@ impl Searcher {
                     if depth <= 8 && !b.see(mv, -p(P::SeeQuiet) * depth) {
                         continue;
                     }
-                } else if depth <= 6 && !b.see(mv, -p(P::SeeNoisy) * depth * depth) {
-                    continue;
+                } else {
+                    // Sprint: captures with a good history get more leeway before SEE pruning.
+                    let ch = if p(P::SprCaptSeeDiv) > 0 && mv.is_capture() {
+                        self.capt_hist[b.mailbox[mv.from()] as usize][mv.to()][Self::captured_type(b, mv)] / p(P::SprCaptSeeDiv)
+                    } else {
+                        0
+                    };
+                    if depth <= 6 && !b.see(mv, -p(P::SeeNoisy) * depth * depth - ch) {
+                        continue;
+                    }
                 }
             }
 
@@ -887,6 +895,9 @@ impl Searcher {
                         return s_beta; // multi-cut
                     } else if tt_score >= beta {
                         ext = -1;
+                    } else if cut_node && p(P::SprSeCutNeg) > 0 {
+                        // Sprint: not singular at an expected cut-node: search the TT move shallower.
+                        ext = -p(P::SprSeCutNeg);
                     }
                 }
             }
@@ -914,6 +925,9 @@ impl Searcher {
                     // Positions that were once on a principal variation are searched less aggressively.
                     r -= (tt_pv && !pv_node) as i32 * p(P::TtPvLmr);
                     r += cut_node as i32;
+                    // Sprint: cut-nodes without a TT move, and quiets when the TT move is a capture.
+                    r += (cut_node && tt_move.is_null()) as i32 * p(P::SprCutNoTt);
+                    r += (is_quiet && !tt_move.is_null() && tt_move.is_capture()) as i32 * p(P::SprTtCaptLmr);
                     r += !improving as i32;
                     r -= nb.in_check() as i32;
                     if is_quiet {
@@ -931,6 +945,11 @@ impl Searcher {
                     // shallower if only just.
                     new_depth += (s > best + p(P::DeeperMargin) + 2 * new_depth) as i32 - (s < best + new_depth) as i32;
                     s = -self.negamax(&nb, new_depth, -alpha - 1, -alpha, ply + 1, !cut_node);
+                    // Sprint: a quiet move's re-search result feeds straight back into its history.
+                    if is_quiet && p(P::SprLmrRes) > 0 && !self.stopped {
+                        let bonus = (p(P::HistBonusMul) * new_depth - 50).min(p(P::HistBonusMax)) * p(P::SprLmrRes) / 64;
+                        self.update_quiet(b, mv, ply, if s > alpha { bonus } else { -bonus }, threats);
+                    }
                 }
                 if s > alpha && s < beta {
                     s = -self.negamax(&nb, new_depth, -beta, -alpha, ply + 1, false);
@@ -957,7 +976,9 @@ impl Searcher {
                     }
                     self.pv_len[ply] = child_len;
                     if score >= beta {
-                        let bonus = (p(P::HistBonusMul) * depth - 50).min(p(P::HistBonusMax));
+                        // Sprint: a cutoff far above beta counts as if found one ply deeper.
+                        let hd = depth + (p(P::SprFhDepth) > 0 && score > beta + 150) as i32;
+                        let bonus = (p(P::HistBonusMul) * hd - 50).min(p(P::HistBonusMax));
                         if is_quiet {
                             if self.killers[ply][0] != mv {
                                 self.killers[ply][1] = self.killers[ply][0];
