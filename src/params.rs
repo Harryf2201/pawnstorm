@@ -63,6 +63,10 @@ params! {
     // Search sprint 4: each 0 = off.
     SprHindsight = 0, 0, 1;
     SprCaptFut = 0, 0, 400;
+    // Search sprint 5: each 0 = off.
+    SprEvalHist = 0, 0, 20;
+    SprTtProbcut = 0, 0, 800;
+    SprCutCnt = 0, 0, 2;
 }
 
 static mut GENERATION: u32 = 0;

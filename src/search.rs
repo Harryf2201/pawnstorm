@@ -90,11 +90,15 @@ struct PlyInfo {
     excluded: Move,
     /// Reduction applied to the move searched from this ply (for hindsight depth adjustment at the child).
     reduction: i32,
+    /// Sprint 5: the quiet move played from this ply and its threat flags (from, to attacked), for eval feedback.
+    quiet: Option<(Move, usize, usize)>,
+    /// Sprint 5: beta cutoffs at this ply since the parent started its move loop.
+    cutoffs: i32,
 }
 
 impl Default for PlyInfo {
     fn default() -> Self {
-        PlyInfo { static_eval: NO_EVAL, cont: NO_CONT, excluded: Move::NULL, reduction: 0 }
+        PlyInfo { static_eval: NO_EVAL, cont: NO_CONT, excluded: Move::NULL, reduction: 0, quiet: None, cutoffs: 0 }
     }
 }
 
@@ -715,6 +719,10 @@ impl Searcher {
         self.seldepth = self.seldepth.max(ply);
 
         let excluded = self.stack[ply].excluded;
+        if excluded.is_null() {
+            self.stack[ply].quiet = None;
+            self.stack[ply + 2].cutoffs = 0;
+        }
         let tt_entry = if excluded.is_null() { self.tt.probe(b.hash) } else { None };
         let tt_pv = pv_node || tt_entry.is_some_and(|e| e.pv);
         let tt_move = tt_entry.map_or(Move::NULL, |e| e.mv);
@@ -807,6 +815,24 @@ impl Searcher {
             }
             if prior_r >= 1 && depth >= 2 && both > 175 {
                 depth -= 1;
+            }
+        }
+        // Sprint 5: the static eval change after the parent's quiet move feeds back into its history.
+        if p(P::SprEvalHist) > 0 && !in_check && excluded.is_null() && tt_entry.is_none() && ply >= 1 && self.stack[ply - 1].static_eval != NO_EVAL {
+            if let Some((m, tf, tt)) = self.stack[ply - 1].quiet {
+                let sum = self.stack[ply - 1].static_eval + static_eval;
+                let bonus = ((-sum * p(P::SprEvalHist)).clamp(-1980, 1560) + 630) * 15 / 16;
+                gravity(&mut self.butterfly[b.stm ^ 1][tf][tt][m.from()][m.to()], bonus);
+            }
+        }
+        // Sprint 5: TT ProbCut: a slightly shallower TT lower bound far above beta is trusted.
+        if p(P::SprTtProbcut) > 0 && !pv_node && !in_check && excluded.is_null() && beta.abs() < MATE_BOUND {
+            if let Some(e) = tt_entry {
+                let s = score_from_tt(e.score, ply);
+                let pc_beta = beta + p(P::SprTtProbcut);
+                if e.bound != BOUND_UPPER && e.depth >= depth - 4 && s >= pc_beta && s.abs() < MATE_BOUND {
+                    return pc_beta;
+                }
             }
         }
         self.killers[ply + 1] = [Move::NULL; 2];
@@ -1018,6 +1044,7 @@ impl Searcher {
                 ext = 1;
             }
             self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
+            self.stack[ply].quiet = if is_quiet { Some((mv, (threats >> mv.from()) as usize & 1, (threats >> mv.to()) as usize & 1)) } else { None };
             self.hashes.push(nb.hash);
             legal += 1;
             let mut new_depth = depth - 1 + ext;
@@ -1038,6 +1065,8 @@ impl Searcher {
                     r += (is_quiet && !tt_move.is_null() && tt_move.is_capture()) as i32 * p(P::SprTtCaptLmr);
                     r += !improving as i32;
                     r -= nb.in_check() as i32;
+                    // Sprint 5: the child has kept failing high on earlier moves here.
+                    r += (self.stack[ply + 1].cutoffs > 2) as i32 * p(P::SprCutCnt);
                     if is_quiet && p(P::SprCorrLmr) > 0 {
                         r -= (corr_mag / p(P::SprCorrLmr)).min(2);
                     }
@@ -1089,6 +1118,7 @@ impl Searcher {
                     }
                     self.pv_len[ply] = child_len;
                     if score >= beta {
+                        self.stack[ply].cutoffs += 1;
                         // Sprint: a cutoff far above beta counts as if found one ply deeper.
                         let hd = depth + (p(P::SprFhDepth) > 0 && score > beta + 150) as i32;
                         let bonus = (p(P::HistBonusMul) * hd - 50).min(p(P::HistBonusMax));
