@@ -272,6 +272,47 @@ fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
     }
 }
 
+/// pairwise_inputs for an accumulator plus some extra feature rows (threat inputs), added on the fly
+/// instead of into a copy of the accumulator. Wrapping i16 adds, so the result equals adding them first.
+#[cfg(target_feature = "avx2")]
+#[inline(always)]
+fn pairwise_threat(v: &[i16; HIDDEN], rows: &[&[i16; HIDDEN]], out: &mut [u8]) {
+    use std::arch::x86_64::*;
+    const HALF: usize = HIDDEN / 2;
+    unsafe {
+        let zero = _mm256_setzero_si256();
+        let qa = _mm256_set1_epi16(QA as i16);
+        let load = |p: *const i16| _mm256_load_si256(p as *const __m256i);
+        let sum = |o: usize| {
+            let mut a = load(v.as_ptr().add(o));
+            for r in rows {
+                a = _mm256_add_epi16(a, load(r.as_ptr().add(o)));
+            }
+            _mm256_min_epi16(_mm256_max_epi16(a, zero), qa)
+        };
+        let mut i = 0;
+        while i < HALF {
+            let r0 = _mm256_mulhrs_epi16(_mm256_slli_epi16::<6>(sum(i)), sum(i + HALF));
+            let r1 = _mm256_mulhrs_epi16(_mm256_slli_epi16::<6>(sum(i + 16)), sum(i + HALF + 16));
+            let packed = _mm256_permute4x64_epi64::<0b11_01_10_00>(_mm256_packus_epi16(r0, r1));
+            _mm256_storeu_si256(out.as_mut_ptr().add(i) as *mut __m256i, packed);
+            i += 32;
+        }
+    }
+}
+
+#[cfg(not(target_feature = "avx2"))]
+#[inline(always)]
+fn pairwise_threat(v: &[i16; HIDDEN], rows: &[&[i16; HIDDEN]], out: &mut [u8]) {
+    let mut t = *v;
+    for r in rows {
+        for (a, d) in t.iter_mut().zip(r.iter()) {
+            *a = a.wrapping_add(*d);
+        }
+    }
+    pairwise_inputs(&t, out);
+}
+
 /// Dot product of 0..=127 inputs with i8 weights (HIDDEN long).
 #[cfg(target_feature = "avx2")]
 #[inline(always)]
@@ -337,23 +378,23 @@ fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
 pub fn evaluate(acc: &AccPair, b: &Board) -> i32 {
     let net = net();
     let (stm, pieces) = (b.stm, b.occ().count_ones());
-    // Threat inputs: add the attacked-piece features to copies of the accumulators.
-    let mut ta = *acc;
+    // Threat inputs: the feature rows of every piece attacked by the other side, per perspective; they are
+    // added on the fly in pairwise_threat.
+    let first = &net.feature_weights[0].vals;
+    let mut rows: [[&[i16; HIDDEN]; 32]; 2] = [[first; 32]; 2];
+    let mut n = 0;
     for c in 0..2 {
         let mut bb = b.colors[c] & b.threats(c ^ 1);
-        while bb != 0 {
+        while bb != 0 && n < 32 {
             let sq = bb.trailing_zeros() as usize;
             let pc = b.mailbox[sq] as usize;
-            for (persp, a) in ta.iter_mut().enumerate() {
-                let w = &net.feature_weights[768 + feature(persp, pc, sq)].vals;
-                for (v, d) in a.vals.iter_mut().zip(w) {
-                    *v += *d;
-                }
+            for (persp, r) in rows.iter_mut().enumerate() {
+                r[n] = &net.feature_weights[768 + feature(persp, pc, sq)].vals;
             }
+            n += 1;
             bb &= bb - 1;
         }
     }
-    let acc = &ta;
     // Same rule as bullet's MaterialCount<N>: (pieces - 2) / ceil(32 / N).
     let bucket = ((pieces.saturating_sub(2)) as usize / 32usize.div_ceil(OUTPUT_BUCKETS)).min(OUTPUT_BUCKETS - 1);
     const HALF: usize = HIDDEN / 2;
@@ -363,7 +404,11 @@ pub fn evaluate(acc: &AccPair, b: &Board) -> i32 {
     struct Inputs([u8; HIDDEN]);
     let mut x = Inputs([0; HIDDEN]);
     for (side, base) in [(stm, 0), (stm ^ 1, HALF)] {
-        pairwise_inputs(&acc[side].vals, &mut x.0[base..base + HALF]);
+        if n == 0 {
+            pairwise_inputs(&acc[side].vals, &mut x.0[base..base + HALF]);
+        } else {
+            pairwise_threat(&acc[side].vals, &rows[side][..n], &mut x.0[base..base + HALF]);
+        }
     }
     let q = unsafe { L1Q.unwrap_unchecked() };
     let mut h1 = net.l1b[bucket];
