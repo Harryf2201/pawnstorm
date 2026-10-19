@@ -82,7 +82,7 @@
   .helptext b { color: var(--text); }
 
   /* Tabs: top bar on wide screens, thumb-friendly bottom bar on phones */
-  nav#tabs { display: flex; gap: 4px; }
+  nav#tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   nav#tabs button { background: none; border: 0; color: var(--muted); font: inherit; padding: 7px 12px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
   nav#tabs button:hover { color: var(--text); }
   nav#tabs button.active { background: var(--panel2); color: var(--text); font-weight: 600; }
@@ -360,6 +360,7 @@ function trackRate(g) {
 // Engine names -> friendly version names, from versions.ini (served by /api/versions).
 // "Pawnstorm-0.1", "pawnstorm-v0.1" and every other name listed for a version are the same engine.
 let catalog = [], aliasMap = {}, aliasRe = null, titleMap = {};
+let gate = null;
 const ekey = n => {
   const s = String(n).toLowerCase().replace(/[^a-z0-9.]/g, '');
   let o = '';
@@ -616,7 +617,7 @@ function nowRows() {
   live.forEach(r => {
     const d = details[r.id];
     const s = d && d.summary, n = s ? s.w + s.d + s.l : r.games;
-    const eta = d && r.games > 0 && r.total && !d.llr && r.type !== 'sprt' ? dur(d.elapsed / r.games * (r.total - r.games)) : null;
+    const eta = d && r.games > 0 && r.total && !d.llr && r.type !== 'sprt' ? (etaSecs(d, r.games, r.total) == null ? null : dur(etaSecs(d, r.games, r.total))) : null;
     const sc = s && n ? ` · ${esc(short(r.main))} is scoring ${(100 * s.score).toFixed(0)}% so far` : '';
     rows.push({
       state: 'running', icon: '⚔️', t: friendlyText(r.name),
@@ -705,8 +706,23 @@ function renderGoals() {
   <div style="margin-top:10px"><span class="help" data-go="achievements">See all achievements →</span></div>`;
 }
 
+/// The 2.0 gate (coord/gate.json): each rule fixed in advance, the latest candidate's result and verdict.
+function renderGate() {
+  if (!gate || !gate.checks) return '';
+  const tone = { pass: 'pos', fail: 'neg', pending: 'warnc' };
+  const mark = { pass: '✓', fail: '✗', pending: '…' };
+  const rows = gate.checks.map(c => `<tr><td>${esc(c.name)}</td><td class="${tone[c.state] || ''}" style="font-variant-numeric:tabular-nums">${esc(c.value || '–')}</td><td class="sub">${esc(c.need)}</td><td class="${tone[c.state] || ''}" style="text-align:center">${mark[c.state] || ''}</td></tr>`).join('');
+  const v = gate.verdict;
+  return `<div class="panel" style="margin-bottom:14px">
+    <h2 style="margin-top:0">2.0 gate <span class="sub" style="text-transform:none;letter-spacing:0">· ${esc(gate.candidate)} · ${esc(gate.date)}</span>
+      <span class="${tone[v] || ''}" style="float:right;text-transform:none;letter-spacing:0">${v === 'pass' ? 'Passed' : v === 'fail' ? 'Not yet' : 'In progress'}</span></h2>
+    <div style="overflow-x:auto"><table><thead><tr><th>Rule</th><th>Result</th><th>Needed</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${gate.note ? `<div class="d" style="margin-top:8px">${esc(gate.note)}</div>` : ''}
+  </div>`;
+}
+
 function renderOverview(m) {
-  return renderHero(m) + renderExperiments(m) + renderNow() + renderLichess() + renderGoals();
+  return renderHero(m) + renderGate() + renderExperiments(m) + renderNow() + renderLichess() + renderGoals();
 }
 
 /// Experiments (versions with a letter, e.g. v1.2k): how each compares with the version it was
@@ -815,7 +831,7 @@ function renderRun(r, b, compact) {
   if (!r) return `<h3><span class="dot ${b.status}"></span>${esc(friendlyText(b.name))}</h3><div class="sub" style="margin-top:8px">Loading…</div>`;
   b = r.brief; const s = r.summary;
   const pctDone = b.total ? Math.min(100, 100 * b.games / b.total) : 0;
-  const eta = b.status === 'running' && b.games > 0 && b.total && !r.llr && b.type !== 'sprt' ? ' · about ' + dur(r.elapsed / b.games * (b.total - b.games)) + ' left' : '';
+  const eta = b.status === 'running' && b.games > 0 && b.total && !r.llr && b.type !== 'sprt' ? (etaSecs(r, b.games, b.total) == null ? ' · paused' : ' · about ' + dur(etaSecs(r, b.games, b.total)) + ' left') : '';
   const W = viewW() - 64;
   let html = compact ? '' : `<h3><span class="dot ${b.status}"></span>${esc(friendlyText(b.name))} <span class="pill">${esc(b.type)}</span></h3>`;
   html += `<div class="sub" style="margin-top:${compact ? 12 : 4}px">${esc(short(b.main))} · ${esc(b.tc)} per game · ${r.concurrency || '?'} games at a time · ${b.status === 'running' ? 'running for ' + dur(r.elapsed) : 'took ' + dur(r.elapsed)}${r.notes ? " · " + esc(friendlyText(r.notes)) : ""}</div>
@@ -897,6 +913,9 @@ function liveGame(g) {
 // The newest round robin, or a gauntlet of several of our engines against Stockfish (a "ladder"), whichever is newer.
 const latestChampionship = () => runs.filter(r => r.type === 'roundrobin' || (r.type === 'gauntlet' && /stockfish|ladder|championship/i.test(r.name)))
   .sort((a, b) => b.created - a.created)[0];
+// Seconds left in a match: from the recent pace when the server has it (pauses don't stretch it),
+// none while nothing is finishing, else the average since the start.
+const etaSecs = (d, games, total) => d.pace > 0 ? (total - games) / d.pace : d.pace === 0 ? null : d.elapsed / games * (total - games);
 const CHAMP_NAMES = { stockfish: 'Stockfish 18 (full strength)', rubichess: 'RubiChess', dragon: 'Komodo Dragon', plentychess: 'PlentyChess' };
 const champName = n => CHAMP_NAMES[n] || label(n);
 
@@ -917,7 +936,7 @@ function renderChampionship() {
   });
   const fit = d.fit.slice().sort((a, b) => b.rating - a.rating);
   const games = rr.games || 0, total = rr.total || 0;
-  const left = running && games > 20 ? d.elapsed / games * (total - games) : null;
+  const left = running && games > 20 ? etaSecs(d, games, total) : null;
   const p = total ? 100 * games / total : 0;
 
   // Rating ladder: bars with 95% error whiskers on a shared scale.
@@ -1042,10 +1061,14 @@ function renderCompare() {
   const rec2 = cmpData.recent || {};
   if (!sel.length) sel = [...ours].sort((a, b) => (rec2[b] || 0) - (rec2[a] || 0) || (total(b, isSF) > 0) - (total(a, isSF) > 0)).slice(0, 2);
   const col = n => CMP_COL[sel.indexOf(n)];
-  const chips = ours.slice(0, 16).map(n => {
+  // Released versions (in versions.ini) by default; one-off test builds only on request. Picks always stay visible.
+  const listed = n => !!aliasMap[ekey(n)];
+  const extra = ours.filter(n => !listed(n)).length;
+  const pool = ui.cmpAll ? ours : ours.filter(n => listed(n) || sel.includes(n));
+  const chips = pool.slice(0, ui.cmpAll ? 40 : 16).map(n => {
     const on = sel.includes(n), full = !on && sel.length >= 3;
     return `<button class="btn sm ${on ? 'on' : ''}" data-set="cmpToggle:${esc(n)}" ${full ? 'disabled title="Three at most: deselect one first"' : ''}>${on ? `<i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${col(n)};margin-right:5px"></i>` : ''}${esc(short(n))}</button>`;
-  }).join(' ');
+  }).join(' ') + (extra ? ` <button class="btn sm" data-set="cmpAll:${ui.cmpAll ? '' : 1}">${ui.cmpAll ? 'Hide test builds' : `+ ${extra} test builds`}</button>` : '');
   const sfOpp = [...new Set(sel.flatMap(n => Object.keys(rec[n] || {}).filter(isSF)))]
     .sort((a, b) => (anc[a] ?? 1e9) - (anc[b] ?? 1e9));
   const sfName = o => anc[o] != null ? 'SF ' + anc[o].toFixed(0) : 'SF full';
@@ -1664,8 +1687,9 @@ function renderHealth() {
   };
   const states = {
     ok: ['pos', '✓ All good: everything within safe limits'],
-    warn: ['warnc', '⚠ Data generation paused: ' + h.reason],
-    critical: ['neg', '⛔ Everything paused: ' + h.reason],
+    // The watchdog keeps the reading that triggered a pause until everything has stayed normal for a minute.
+    warn: ['warnc', h.warn_now ? '⚠ Data generation paused: ' + h.warn_now : '⚠ Data generation paused after ' + h.reason + '; resumes once every reading has stayed in its normal range for a few minutes'],
+    critical: ['neg', h.warn_now ? '⛔ Everything paused: ' + h.warn_now : '⛔ Everything paused after ' + h.reason + '; resumes once every reading has stayed in its normal range for a few minutes'],
     manual: ['warnc', '⏸ Everything paused by you'],
   };
   const [sc, st] = stale ? ['neg', 'Watchdog stopped responding'] : states[h.level] || ['', h.level];
@@ -1754,9 +1778,10 @@ async function poll() {
   const j = async u => { try { return await (await fetch(u)).json(); } catch (e) { return undefined; } };
   const n = pollN++;
   try {
-    const [h, l, t, s, g, r, rt, a, cat, pr, sp, li, lv] = await Promise.all([
+    const [h, l, t, s, g, r, rt, a, cat, pr, sp, li, lv, gt] = await Promise.all([
       j('/api/health'), j('/api/lab'), j('/api/training'), j('/api/schedule'), j('/api/datagen'), j('/api/runs'),
       j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'), j('/api/prepare'), j('/api/spsa'), j('/api/lichess'), j('/api/lichess/live'),
+      n % 5 === 0 ? j('/api/gate') : Promise.resolve(undefined),
     ]);
     if (r === undefined) throw new Error('unreachable');
     health = h ?? null; lab = l ?? null; schedule = s ?? null;
@@ -1773,6 +1798,7 @@ async function poll() {
     lichess = li ?? null;
     lichessLive = lv ?? null;
     if (a) ach = a;
+    if (gt !== undefined) gate = gt;
     const champ = latestChampionship();
     const want = runs.filter(x => x.status === 'running' || isOpen('run:' + x.id) || x === champ).map(x => x.id);
     const got = await Promise.all(want.map(id => j('/api/run/' + encodeURIComponent(id))));

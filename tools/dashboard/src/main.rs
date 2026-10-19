@@ -25,6 +25,27 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const INDEX: &str = include_str!("index.html");
 const STALE_SECS: u64 = 30;
 
+/// "2026-10-17T10:20:50 +0100" (fastchess GameEndTime) as Unix seconds; 0 if it doesn't parse.
+fn parse_pgn_time(s: &str) -> u64 {
+    let (dt, off) = s.split_once(' ').unwrap_or((s, "+0000"));
+    let Some((d, t)) = dt.split_once('T') else { return 0 };
+    let d: Vec<i64> = d.split('-').filter_map(|x| x.parse().ok()).collect();
+    let t: Vec<i64> = t.split(':').filter_map(|x| x.parse().ok()).collect();
+    if d.len() != 3 || t.len() != 3 || off.len() != 5 {
+        return 0;
+    }
+    // Days since 1970-01-01 (Howard Hinnant's days_from_civil).
+    let (y, m) = if d[1] <= 2 { (d[0] - 1, d[1] + 9) } else { (d[0], d[1] - 3) };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * m + 2) / 5 + d[2] - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    let sign = if off.starts_with('-') { -1 } else { 1 };
+    let (oh, om): (i64, i64) = (off[1..3].parse().unwrap_or(0), off[3..5].parse().unwrap_or(0));
+    (days * 86400 + t[0] * 3600 + t[1] * 60 + t[2] - sign * (oh * 3600 + om * 60)).max(0) as u64
+}
+
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -74,6 +95,23 @@ struct Tail {
 }
 
 impl Tail {
+    /// Like read_new, but a first read of a big file starts near its end: the engine log only feeds the
+    /// live boards, and every "position" line carries the whole game, so older traffic is not needed.
+    fn read_recent(&mut self, path: &Path, max_first: u64) -> Vec<String> {
+        if self.offset == 0 {
+            let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            if len > max_first {
+                self.offset = len - max_first;
+                let mut lines = self.read_new(path);
+                if !lines.is_empty() {
+                    lines.remove(0); // probably cut mid-line
+                }
+                return lines;
+            }
+        }
+        self.read_new(path)
+    }
+
     fn read_new(&mut self, path: &Path) -> Vec<String> {
         let Ok(mut f) = File::open(path) else { return vec![] };
         let len = f.metadata().map(|m| m.len()).unwrap_or(0);
@@ -153,6 +191,8 @@ struct Game {
     reason: String,
     plies: u32,
     duration: String,
+    /// When the game ended (Unix seconds, from GameEndTime), 0 if unknown.
+    end: u64,
 }
 
 #[derive(Default)]
@@ -183,6 +223,7 @@ impl PgnParser {
                     "Termination" => self.cur.termination = v,
                     "PlyCount" => self.cur.plies = v.parse().unwrap_or(0),
                     "GameDuration" => self.cur.duration = v,
+                    "GameEndTime" => self.cur.end = parse_pgn_time(&v),
                     _ => {}
                 }
             }
@@ -285,7 +326,7 @@ impl RunState {
         for line in self.pgn_tail.read_new(&dir.join("games.pgn")) {
             self.pgn.feed(&line, &mut self.games);
         }
-        for line in self.log_tail.read_new(&dir.join("engine.log")) {
+        for line in self.log_tail.read_recent(&dir.join("engine.log"), 32 << 20) {
             self.feed_log(&line, t);
         }
         for line in self.out_tail.read_new(&dir.join("output.txt")) {
@@ -624,6 +665,36 @@ fn matchups(runs: &HashMap<String, RunState>, alias: &HashMap<String, String>, s
 /// One joint maximum-likelihood fit over every game in every run. Anchor engines (Elo-limited
 /// Stockfish) keep their fixed ratings; everyone else is solved together, so new games against a
 /// version refine its rating retroactively and version-vs-version games count for both sides.
+/// Diagonal of the inverse of a symmetric positive-definite matrix (Gauss-Jordan with partial
+/// pivoting); entries whose pivot vanishes come back as NaN.
+fn invert_diag(mut a: Vec<Vec<f64>>) -> Vec<f64> {
+    let m = a.len();
+    let mut inv: Vec<Vec<f64>> = (0..m).map(|i| (0..m).map(|j| if i == j { 1.0 } else { 0.0 }).collect()).collect();
+    for c in 0..m {
+        let p = (c..m).max_by(|&x, &y| a[x][c].abs().total_cmp(&a[y][c].abs())).unwrap();
+        if a[p][c].abs() < 1e-12 {
+            return vec![f64::NAN; m];
+        }
+        a.swap(c, p);
+        inv.swap(c, p);
+        let d = a[c][c];
+        for j in 0..m {
+            a[c][j] /= d;
+            inv[c][j] /= d;
+        }
+        for r in 0..m {
+            if r != c && a[r][c] != 0.0 {
+                let f = a[r][c];
+                for j in 0..m {
+                    a[r][j] -= f * a[c][j];
+                    inv[r][j] -= f * inv[c][j];
+                }
+            }
+        }
+    }
+    (0..m).map(|i| inv[i][i]).collect()
+}
+
 fn global_ratings(runs: &HashMap<String, RunState>, alias: &HashMap<String, String>) -> Vec<Rated> {
     let mut idx: HashMap<String, usize> = HashMap::new();
     let mut names: Vec<String> = Vec::new();
@@ -725,12 +796,40 @@ fn global_ratings(runs: &HashMap<String, RunState>, alias: &HashMap<String, Stri
             break;
         }
     }
+    // Margins from the full information matrix of the free (non-anchor) players: an opponent's own
+    // uncertainty carries over, so many games against one fitted engine no longer look precise.
+    let free: Vec<usize> = (0..n).filter(|&i| anchor[i].is_none() && games[i] > 0.0 && anchored[i]).collect();
+    let pos: HashMap<usize, usize> = free.iter().enumerate().map(|(p, &i)| (i, p)).collect();
+    let m = free.len();
+    let mut h = vec![vec![0.0f64; m]; m];
+    for (&(i, j), c) in &pairs {
+        let w = (c[0] + c[1] + c[2] + 1.0) * {
+            let e = expected(rating[i], rating[j]);
+            e * (1.0 - e)
+        };
+        let (pi, pj) = (pos.get(&i).copied(), pos.get(&j).copied());
+        if let Some(a) = pi {
+            h[a][a] += w;
+        }
+        if let Some(b) = pj {
+            h[b][b] += w;
+        }
+        if let (Some(a), Some(b)) = (pi, pj) {
+            h[a][b] -= w;
+            h[b][a] -= w;
+        }
+    }
+    let var = invert_diag(h);
     (0..n)
         .filter(|&i| anchor[i].is_none() && games[i] > 0.0 && anchored[i])
         .map(|i| Rated {
             name: names[i].clone(),
             rating: rating[i],
-            err: if info[i] > 0.0 { 1.96 * k / info[i].sqrt() } else { 999.0 },
+            err: match var.get(pos[&i]) {
+                Some(&v) if v > 0.0 && v.is_finite() => (1.96 * k * v.sqrt()).min(999.0),
+                _ if info[i] > 0.0 => 1.96 * k / info[i].sqrt(),
+                _ => 999.0,
+            },
             games: games[i],
             first_seen: first_seen[i],
             live: live[i],
@@ -1044,6 +1143,18 @@ fn run_detail(id: &str, r: &RunState) -> String {
     let _ = write!(o, "\"concurrency\":{},\"notes\":{},", r.meta.concurrency, js(&r.meta.notes));
     let elapsed = if status(r) == "running" { now() } else { r.last_activity }.saturating_sub(r.meta.created);
     let _ = write!(o, "\"elapsed\":{},", elapsed);
+    // Recent pace (games per second over the last 20 minutes of finished games), so pauses do not
+    // stretch time-left estimates; 0 when nothing has finished for 5 minutes.
+    let last_end = r.games.iter().map(|g| g.end).max().unwrap_or(0);
+    let pace = if last_end == 0 {
+        -1.0
+    } else if status(r) == "running" && now().saturating_sub(last_end) > 300 {
+        0.0
+    } else {
+        let n = r.games.iter().filter(|g| g.end + 1200 >= last_end).count();
+        if n >= 10 { n as f64 / 1200.0 } else { -1.0 }
+    };
+    let _ = write!(o, "\"pace\":{},", num(pace));
     match &r.llr {
         Some(v) => {
             let _ = write!(
@@ -1218,6 +1329,9 @@ struct App {
     version_files: Vec<PathBuf>,
     /// The Lichess bot's games in progress (/api/lichess/live).
     bot: Mutex<BotLog>,
+    /// When the runs were last refreshed, and the run ids then (newest first): page loads ask for several
+    /// endpoints at once, and one refresh every few seconds is plenty.
+    refreshed: Mutex<Option<(std::time::Instant, Vec<String>)>>,
 }
 
 impl App {
@@ -1255,6 +1369,12 @@ impl App {
     }
 
     fn refresh_all(&self) -> Vec<String> {
+        let mut last = self.refreshed.lock().unwrap();
+        if let Some((t, ids)) = last.as_ref() {
+            if t.elapsed().as_secs() < 3 {
+                return ids.clone();
+            }
+        }
         let dir = self.root.join("runs");
         let mut ids: Vec<String> = std::fs::read_dir(&dir)
             .map(|rd| {
@@ -1272,6 +1392,7 @@ impl App {
         ids.sort_by_key(|id| runs[id].meta.created);
         compute_ratings(&mut runs, &ids, &alias_map(&self.versions()));
         ids.reverse();
+        *last = Some((std::time::Instant::now(), ids.clone()));
         ids
     }
 
@@ -1902,6 +2023,11 @@ impl App {
         if path == "/api/prepare" {
             return ("200 OK", self.prepare(), "application/json");
         }
+        if path == "/api/gate" {
+            // The 2.0 gate: rules and the latest candidate's results, kept in <lab>/coord/gate.json.
+            let s = std::fs::read_to_string(self.root.join("coord").join("gate.json")).unwrap_or_else(|_| "null".into());
+            return ("200 OK", s, "application/json");
+        }
         if path == "/api/versions" {
             return ("200 OK", self.versions_json(), "application/json");
         }
@@ -2070,7 +2196,7 @@ fn main() {
         .into_iter()
         .collect();
     version_files.push(PathBuf::from("versions.ini"));
-    let app = Arc::new(App { root, runs: Mutex::new(HashMap::new()), lab_child: Mutex::new(None), version_files, bot: Mutex::new(BotLog::default()) });
+    let app = Arc::new(App { root, runs: Mutex::new(HashMap::new()), lab_child: Mutex::new(None), version_files, bot: Mutex::new(BotLog::default()), refreshed: Mutex::new(None) });
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("cannot bind port");
     println!("Pawnstorm Lab running at http://localhost:{port}");
     for stream in listener.incoming().flatten() {
@@ -2082,6 +2208,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pgn_end_time() {
+        assert_eq!(parse_pgn_time("1970-01-01T00:00:00 +0000"), 0);
+        assert_eq!(parse_pgn_time("2026-10-17T10:20:50 +0100"), 1792228850);
+        assert_eq!(parse_pgn_time("nonsense"), 0);
+    }
 
     #[test]
     fn llr_line_from_fastchess() {
