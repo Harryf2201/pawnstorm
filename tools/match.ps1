@@ -40,6 +40,14 @@ foreach ($spec in $Engines) {
         $elo = $Matches[1]; $n = "SF-$elo"
         $fcArgs += '-engine', "cmd=$($Known.stockfish)", "name=$n", 'option.UCI_LimitStrength=true', "option.UCI_Elo=$elo"
         $anchors += "anchor=${n}:$elo"
+    } elseif ($spec -match '^rubi:(\d+)$') {
+        # RubiChess handicapped to a fixed speed (LimitNps): no known rating, the tournament fit rates it.
+        $n = "Rubi-$([int]$Matches[1] / 1000)knps"
+        $fcArgs += '-engine', "cmd=$($Known.rubichess)", "name=$n", "option.LimitNps=$($Matches[1])"
+    } elseif ($spec -match '^plenty:(\d+)$') {
+        # PlentyChess handicapped to a fixed number of nodes per move (its own clock still runs).
+        $n = "Plenty-$($Matches[1])n"
+        $fcArgs += '-engine', "cmd=$($Known.plentychess)", "name=$n", "nodes=$($Matches[1])"
     } elseif ($Known.ContainsKey($spec)) {
         $n = $spec
         $fcArgs += '-engine', "cmd=$($Known[$spec])", "name=$n"
