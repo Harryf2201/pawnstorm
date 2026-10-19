@@ -608,6 +608,7 @@ impl Searcher {
                 if s <= alpha {
                     beta = (alpha + beta) / 2;
                     alpha = (s - delta).max(-INF);
+                    fh = 0;
                 } else if s >= beta {
                     beta = (s + delta).min(INF);
                     fh = (fh + p(P::SprAspFh)).min(3);
@@ -1155,8 +1156,8 @@ impl Searcher {
                     best = best.max(futility);
                     continue;
                 }
-            } else if p(P::SprQsEvas) > 0 && best > -MATE_BOUND && mv.is_quiet() {
-                // Sprint: in check, once an evasion has shown we are not mated, skip quiet evasions.
+            } else if p(P::SprQsEvas) > 0 && best > -MATE_BOUND && legal >= 2 && mv.is_quiet() {
+                // Sprint: in check, once two evasions have been searched and we are not mated, skip quiet evasions.
                 continue;
             }
             let mut nb = *b;
