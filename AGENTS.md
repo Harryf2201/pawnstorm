@@ -56,9 +56,9 @@ own branches (listed in EXPERIMENTS.md and versions.ini).
 - **Nothing that costs money.** No admin (UAC) prompts unless the owner is at the PC.
 - Keep engines below normal priority so the PC stays usable.
 - Deleting Pawnstorm files (old data mixes, scratch builds) is fine without asking.
-- **Version names:** plain numbers (v1.12, v1.13, …); add every version to versions.ini. **v2.0 is reserved**
-  for the first version clearly above 3200 on every measure (overall rating, Stockfish-only rating with its
-  whole margin, and each Stockfish level).
+- **Version names:** plain numbers (v1.12, v1.13, …); add every version to versions.ini. **v2.0** (owner's
+  decision, Oct 19): v1.16 plus whatever passes in the current round of experiments and SPSA run 4; gen7 data is then
+  generated with 2.0. (Earlier rule: the first version clearly above 3200 on every measure; v1.16 missed that gate narrowly.)
 - Stop clearly losing tests early; only run long tests when results are close or promising. Verify
   surprising results before believing them.
 - The Lichess bot is the owner's public account: confirm before changing what it runs.
