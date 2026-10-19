@@ -69,3 +69,35 @@ Elo below is from SPRT/self-play unless it says "vs Stockfish". ± is the 95% ma
 | PC → Oracle server hosting, failover timer, datagen pauses during games | Plays 24/7 | `tools\oracle\`, README |
 | Re-challenges at other time controls, rapid fallback | More games found | lichess-bot config |
 | v1.9 → v1.10 search + pondering → v1.11 | Ratings rising (rapid ~2897) | Oracle `~/pawnstorm-v111` |
+
+## Oct 16-19: toward 2.0
+
+Versions: v1.12 (240-round gen4 net + SPSA run 2), v1.13 (gen5 net + forced-move clock + TT eval fix), v1.14 (768-wide gen5 net,
+3218 +/- 9), v1.15 (768 on gen5 only; level with v1.14 head to head, better against limited Stockfish). See versions.ini.
+
+| Experiment | Result | Verdict | Where |
+|---|---|---|---|
+| Forced-move clock saving (ChatGPT) | +5.0 +/- 4.7 (4000 g) | Kept (v1.13) | codex/forced-clock-20261016 |
+| TT raw static eval fix (ChatGPT) | +7.4 +/- 8.3 (1460 g) | Kept (v1.13) | codex/tt-static-eval-20261016 |
+| gen5 network (512) | +18.3 +/- 7.9 | Kept (v1.13) | net-gen5a |
+| 768-wide gen5 network | +15.5 +/- 7.8 | Kept (v1.14) | branch w768, net-gen5w |
+| 400 training rounds (vs 240) | -0.5 | Dropped | net-gen5b |
+| 4-ply continuation history | -0.2 | Dropped | branch cont4 |
+| AVX2 4-sum dot (x86) | identical, no speed gain | Dropped | dot-lab |
+| Rising result weight 0.2 -> 0.6 | +0.4 | Dropped | net-r1 |
+| 32-neuron first hidden layer | -25.8 (15% slower); +5.5 +/- 12 at fixed nodes; best validation loss | Dropped (not worth the speed, even for long games) | branch ml32, net-l32 |
+| 4 king input buckets (multi-layer) | -11.5 | Shelved until much more data | branch mlkb4, net-kb |
+| Threat inputs (attacked-piece features) | +10.9 +/- 14.7 at fixed nodes, but 25-35% slower (-30 +/- 27 at 8+0.08); fused and incremental versions exact but not faster | Shelved until more data | branch threat, net-thr |
+| Quantisation cost (layer 1 in f32 vs 8-bit, fixed nodes) | -1.6 +/- 11.7 | No cost; quantisation-aware training not needed | branch f32l1 |
+| Lazy SMP thread voting (4 threads) | -1.9 +/- 8.9 | Dropped | branch vote |
+| SPSA run 3 (v1.13/v1.14, 1715 rounds) | settings test running | | testing\spsa |
+| Search sprint 1 (cloud, 3600 g each): LMR re-search history update | +6.0 +/- 5.4 | Candidate | branch sprint1 SprLmrRes |
+| Negative singular extension (-2) at cut-nodes | +5.2 +/- 5.2 | Candidate | SprSeCutNeg |
+| Cut-node reduction without TT move / capture-TT-move quiet reduction / capture history in SEE / fail-high depth bonus | -1.3 / -0.7 / -1.8 / -4.3 | Dropped | sprint1 |
+| Sprint 2: aspiration fail-high depth reduction | +4.8 +/- 5.5 | Candidate | branch sprint2 SprAspFh |
+| TT-cutoff quiet history / quiescence quiet-evasion pruning | -0.7 / +0.2 | Dropped | sprint2 |
+
+Tooling added: held-out validation (testing\datagen\holdout-gen6, trainer -Val, tools/net-check.sh: validation loss matched every
+SPRT direction except where speed differed); cloud test matches on GitHub runners (tools/cloud-test.ps1, test-match workflow);
+match.ps1 -Nodes; prepare-data -SampleRate. Fixed: engines leaked a network copy per EvalFile resend (OOM in long matches);
+watchdog RAM rule could freeze the lab (pausing does not free memory).
