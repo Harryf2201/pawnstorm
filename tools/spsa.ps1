@@ -18,7 +18,9 @@ param(
     # Options file (name=value lines): starting values for a new run; its untuned options go to both engines unchanged.
     [string]$Fixed = '',
     # Regex of option names not to tune (they keep their -Fixed value, or the engine default).
-    [string]$Exclude = ''
+    [string]$Exclude = '',
+    # Narrower tuning ranges, e.g. 'SprCorrLmr=32:192,SprNmpVerify=8:20' (keeps a tuned value off the engine's 0 = off).
+    [string]$Ranges = ''
 )
 . "$PSScriptRoot\paths.ps1"
 . "$PSScriptRoot\job-status.ps1"
@@ -35,6 +37,10 @@ $params = @("uci`nquit" | & $exe | Where-Object { $_ -match '^option name (\S+) 
         [pscustomobject]@{ Name = $Matches[1]; Default = [int]$Matches[2]; Min = [int]$Matches[3]; Max = [int]$Matches[4] }
     } | Where-Object { $_.Name -notin 'Hash', 'Threads', 'Move' })
 if ($Exclude) { $params = @($params | Where-Object { $_.Name -notmatch $Exclude }) }
+foreach ($r in ($Ranges -split ',' | Where-Object { $_ })) {
+    $n, $lo, $hi = $r -split '[=:]'
+    $params | Where-Object { $_.Name -eq $n } | ForEach-Object { $_.Min = [int]$lo; $_.Max = [int]$hi }
+}
 $fixedVals = [ordered]@{}
 if ($Fixed) { Get-Content $Fixed | Where-Object { $_ -match '^(\w+)=(.+)$' -and $Matches[1] -ne 'EvalFile' } | ForEach-Object { $fixedVals[$Matches[1]] = $Matches[2] } }
 $fixedOpts = @($fixedVals.Keys | Where-Object { $_ -notin $params.Name } | ForEach-Object { "option.$_=$($fixedVals[$_])" })
@@ -80,6 +86,8 @@ while ($state.k -lt $N -and -not (Test-Path "$dir\STOP")) {
     if (-not $res) { Set-JobStatus @job -State failed -Detail 'fastchess gave no result (see testing\spsa\last-output.txt).'; $out | Set-Content "$dir\last-output.txt"; exit 1 }
     $g = $res.Matches[0].Groups
     $w = [int]$g[2].Value; $l = [int]$g[3].Value; $d = [int]$g[4].Value
+    # An incomplete batch (an engine crashed or timed out) must not advance the schedule.
+    if ($w + $l + $d -lt 2 * $PairsPerIteration) { $out | Set-Content "$dir\last-output.txt"; continue }
     foreach ($p in $params) {
         $cEnd = [math]::Max(0.5, ($p.Max - $p.Min) / 20)
         $aEnd = $REnd * $cEnd * $cEnd
