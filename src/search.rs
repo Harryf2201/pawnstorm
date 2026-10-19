@@ -917,7 +917,7 @@ impl Searcher {
                     } else {
                         0
                     };
-                    if depth <= 6 && !b.see(mv, -p(P::SeeNoisy) * depth * depth - ch) {
+                    if depth <= 6 && !b.see(mv, (-p(P::SeeNoisy) * depth * depth - ch).min(0)) {
                         continue;
                     }
                 }
