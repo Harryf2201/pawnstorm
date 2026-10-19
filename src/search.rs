@@ -799,6 +799,8 @@ impl Searcher {
         // Sprint: hindsight depth adjustment from the reduction of the move that led here and how the evals moved.
         if p(P::SprHindsight) > 0 && !in_check && excluded.is_null() && ply >= 1 && self.stack[ply - 1].static_eval != NO_EVAL {
             let prior_r = self.stack[ply - 1].reduction;
+            // Consumed here, so re-entries at this ply (null-move verification) do not adjust again.
+            self.stack[ply - 1].reduction = 0;
             let both = static_eval + self.stack[ply - 1].static_eval;
             if prior_r >= 3 && both <= 2 {
                 depth += 1;
@@ -966,6 +968,7 @@ impl Searcher {
                     // Sprint: capture futility: even winning the captured piece cannot reach alpha.
                     if p(P::SprCaptFut) > 0 && !in_check && depth <= 6 && mv.is_capture() && !mv.is_promo()
                         && static_eval + 100 + p(P::SprCaptFut) * depth + crate::board::SEE_VAL[Self::captured_type(b, mv)] <= alpha
+                        && { let mut nb = *b; nb.make_move(mv); !nb.in_check() }
                     {
                         continue;
                     }
