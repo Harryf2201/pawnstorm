@@ -90,12 +90,20 @@ Versions: v1.12 (240-round gen4 net + SPSA run 2), v1.13 (gen5 net + forced-move
 | Threat inputs (attacked-piece features) | +10.9 +/- 14.7 at fixed nodes, but 25-35% slower (-30 +/- 27 at 8+0.08); fused and incremental versions exact but not faster | Shelved until more data | branch threat, net-thr |
 | Quantisation cost (layer 1 in f32 vs 8-bit, fixed nodes) | -1.6 +/- 11.7 | No cost; quantisation-aware training not needed | branch f32l1 |
 | Lazy SMP thread voting (4 threads) | -1.9 +/- 8.9 | Dropped | branch vote |
-| SPSA run 3 (v1.13/v1.14, 1715 rounds) | settings test running | | testing\spsa |
+| SPSA run 3 (v1.13/v1.14, 1715 rounds) | -4.5 +/- 6.7 (2000 g) | Dropped | testingspsa-run3 | testing\spsa |
 | Search sprint 1 (cloud, 3600 g each): LMR re-search history update | +6.0 +/- 5.4 | Candidate | branch sprint1 SprLmrRes |
 | Negative singular extension (-2) at cut-nodes | +5.2 +/- 5.2 | Candidate | SprSeCutNeg |
 | Cut-node reduction without TT move / capture-TT-move quiet reduction / capture history in SEE / fail-high depth bonus | -1.3 / -0.7 / -1.8 / -4.3 | Dropped | sprint1 |
 | Sprint 2: aspiration fail-high depth reduction | +4.8 +/- 5.5 | Candidate | branch sprint2 SprAspFh |
 | TT-cutoff quiet history / quiescence quiet-evasion pruning | -0.7 / +0.2 | Dropped | sprint2 |
+| Sprint 2: minor / major piece correction histories | -0.6 / -2.9 | Dropped | sprint2 |
+| Sprint 1-2 winners combined (combo1) | +7.3 +/- 3.8 (7200 g) | Kept | sprint3 |
+| Sprint 3: null-move verification at depth >= 12 (Codex idea) | +4.1 +/- 5.1 | Candidate | branch sprint3 SprNmpVerify |
+| Less LMR for quiets when the correction history moved the eval a lot (K=64) | +6.4 +/- 5.2 | Candidate | SprCorrLmr |
+| Search the TT move before scoring the rest | +1.7 | Dropped | SprLazyScore |
+| Sprint 4: hindsight depth (parent reduction + eval change; fixed after Codex review) | +10.6 +/- 5.3 | Candidate | branch sprint4 SprHindsight |
+| Capture futility pruning | +0.2 | Dropped | SprCaptFut |
+| Result weight 0.25 / 0.55 / 0.7 (v1.15 recipe, hold-out loss vs 0.011055 at 0.4) | 0.011122 / 0.010951 / 0.011287 | 0.55 to SPRT | net-w25, net-w55, net-w70 |
 
 Tooling added: held-out validation (testing\datagen\holdout-gen6, trainer -Val, tools/net-check.sh: validation loss matched every
 SPRT direction except where speed differed); cloud test matches on GitHub runners (tools/cloud-test.ps1, test-match workflow);
