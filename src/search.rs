@@ -122,6 +122,9 @@ pub struct Searcher {
     corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// The same, keyed by each color's non-pawn pieces (index: side to move, piece color).
     np_corr: Box<[[[i32; CORR_SIZE]; 2]; 2]>,
+    /// Sprint 2: correction histories keyed by minor pieces (N, B, K) and major pieces (R, Q, K).
+    minor_corr: Box<[[i32; CORR_SIZE]; 2]>,
+    major_corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// The same, keyed by the last two moves (continuation correction).
     cont_corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// NNUE accumulators per ply.
@@ -164,6 +167,22 @@ fn non_pawn_key(b: &Board, c: usize) -> usize {
         x = x.wrapping_mul(0xff51afd7ed558ccd);
         x ^= x >> 33;
         h = (h ^ x).wrapping_mul(0xc4ceb9fe1a85ec53).rotate_left(23);
+    }
+    (h ^ (h >> 29)) as usize % CORR_SIZE
+}
+
+/// Hash of some piece types of both colors (type, color and square), for the minor/major correction histories.
+#[inline(always)]
+fn pieces_key(b: &Board, pts: &[usize]) -> usize {
+    let mut h = 0x9E3779B97F4A7C15u64;
+    for &pt in pts {
+        for c in 0..2 {
+            let mut x = (b.pieces[pt] & b.colors[c]) ^ ((pt * 2 + c) as u64 + 1).wrapping_mul(0x2545F4914F6CDD1D);
+            x ^= x >> 33;
+            x = x.wrapping_mul(0xff51afd7ed558ccd);
+            x ^= x >> 33;
+            h = (h ^ x).wrapping_mul(0xc4ceb9fe1a85ec53).rotate_left(23);
+        }
     }
     (h ^ (h >> 29)) as usize % CORR_SIZE
 }
@@ -251,6 +270,8 @@ impl Searcher {
             lmr_gen: generation(),
             corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             np_corr: vec![[[0i32; CORR_SIZE]; 2]; 2].into_boxed_slice().try_into().unwrap(),
+            minor_corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
+            major_corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             cont_corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             acc: vec![[Accumulator { vals: [0; nnue::HIDDEN] }; 2]; MAX_PLY + 8],
             root_nodes: Box::new([[0; 64]; 64]),
@@ -282,6 +303,9 @@ impl Searcher {
         for side in self.np_corr.iter_mut().flatten() {
             side.fill(0);
         }
+        for t in self.minor_corr.iter_mut().chain(self.major_corr.iter_mut()) {
+            t.fill(0);
+        }
     }
 
     /// Index into the continuation correction table for the position at `ply`, if it has two previous moves.
@@ -301,6 +325,12 @@ impl Searcher {
         if let Some(k) = self.cont_key(ply) {
             c += self.cont_corr[s][k] * p(P::CorrContW);
         }
+        if p(P::CorrMinorW) > 0 {
+            c += self.minor_corr[s][pieces_key(b, &[KNIGHT, BISHOP, KING])] * p(P::CorrMinorW);
+        }
+        if p(P::CorrMajorW) > 0 {
+            c += self.major_corr[s][pieces_key(b, &[ROOK, QUEEN, KING])] * p(P::CorrMajorW);
+        }
         (Self::fade_eval(b, raw) + c / (CORR_GRAIN * 256)).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
@@ -315,6 +345,12 @@ impl Searcher {
         upd(&mut self.np_corr[s][BLACK][non_pawn_key(b, BLACK)]);
         if let Some(k) = self.cont_key(ply) {
             upd(&mut self.cont_corr[s][k]);
+        }
+        if p(P::CorrMinorW) > 0 {
+            upd(&mut self.minor_corr[s][pieces_key(b, &[KNIGHT, BISHOP, KING])]);
+        }
+        if p(P::CorrMajorW) > 0 {
+            upd(&mut self.major_corr[s][pieces_key(b, &[ROOK, QUEEN, KING])]);
         }
     }
 
@@ -562,8 +598,10 @@ impl Searcher {
         for depth in 1..=max_depth {
             let mut delta = p(P::AspDelta);
             let (mut alpha, mut beta) = if depth >= 4 { (score - delta, score + delta) } else { (-INF, INF) };
+            // Sprint: after a fail-high, re-search slightly shallower (the score is already known to be good).
+            let mut fh = 0;
             loop {
-                let s = self.negamax(board, depth, alpha, beta, 0, false);
+                let s = self.negamax(board, (depth - fh).max(1), alpha, beta, 0, false);
                 if self.stopped {
                     break;
                 }
@@ -572,6 +610,7 @@ impl Searcher {
                     alpha = (s - delta).max(-INF);
                 } else if s >= beta {
                     beta = (s + delta).min(INF);
+                    fh = (fh + p(P::SprAspFh)).min(3);
                 } else {
                     score = s;
                     break;
@@ -681,6 +720,14 @@ impl Searcher {
                     || (e.bound == BOUND_LOWER && s >= beta)
                     || (e.bound == BOUND_UPPER && s <= alpha))
             {
+                // Sprint: a quiet TT move that cuts off here earns its history bonus too.
+                if p(P::SprTtHist) > 0 && s >= beta && !tt_move.is_null() && tt_move.is_quiet()
+                    && b.mailbox[tt_move.from()] != NO_PIECE && b.mailbox[tt_move.from()] as usize / 6 == b.stm && b.mailbox[tt_move.to()] == NO_PIECE
+                {
+                    let bonus = (p(P::HistBonusMul) * depth - 50).min(p(P::HistBonusMax));
+                    let threats = b.threats(b.stm ^ 1);
+                    self.update_quiet(b, tt_move, ply, bonus, threats);
+                }
                 return s;
             }
         }
@@ -1108,6 +1155,9 @@ impl Searcher {
                     best = best.max(futility);
                     continue;
                 }
+            } else if p(P::SprQsEvas) > 0 && best > -MATE_BOUND && mv.is_quiet() {
+                // Sprint: in check, once an evasion has shown we are not mated, skip quiet evasions.
+                continue;
             }
             let mut nb = *b;
             nb.make_move(mv);

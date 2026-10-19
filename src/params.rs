@@ -50,6 +50,12 @@ params! {
     SprSeCutNeg = 0, 0, 2;
     SprLmrRes = 0, 0, 128;
     SprTtCaptLmr = 0, 0, 2;
+    // Search sprint 2: each 0 = off.
+    SprTtHist = 0, 0, 1;
+    SprQsEvas = 0, 0, 1;
+    SprAspFh = 0, 0, 1;
+    CorrMinorW = 0, 0, 384;
+    CorrMajorW = 0, 0, 384;
 }
 
 static mut GENERATION: u32 = 0;
