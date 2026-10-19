@@ -59,6 +59,7 @@ params! {
     // Search sprint 3 (ideas from Codex's review): each 0 = off.
     SprNmpVerify = 0, 0, 20;
     SprCorrLmr = 0, 0, 512;
+    SprLazyScore = 0, 0, 1;
 }
 
 static mut GENERATION: u32 = 0;

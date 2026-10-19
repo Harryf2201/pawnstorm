@@ -896,7 +896,17 @@ impl Searcher {
         let mut list = MoveList::new();
         b.gen_moves(&mut list, false);
         let mut scores = [0i32; 256];
-        self.score_moves(b, &list, &mut scores, tt_move, ply, threats);
+        // Sprint: with a TT move in the list, search it first and score the other moves only if it does not cut
+        // off (most cut-nodes then skip scoring altogether).
+        let mut scored = false;
+        let tt_at = if p(P::SprLazyScore) > 0 && !tt_move.is_null() { list.moves[..list.len].iter().position(|&m| m == tt_move) } else { None };
+        if let Some(k) = tt_at {
+            list.moves.swap(0, k);
+            scores[0] = 10_000_000;
+        } else {
+            self.score_moves(b, &list, &mut scores, tt_move, ply, threats);
+            scored = true;
+        }
 
         let mut best = -INF;
         let mut best_move = Move::NULL;
@@ -908,6 +918,10 @@ impl Searcher {
         let mut skip_quiets = false;
 
         for i in 0..list.len {
+            if i == 1 && !scored {
+                self.score_moves(b, &list, &mut scores, tt_move, ply, threats);
+                scored = true;
+            }
             let mv = Self::pick(&mut list, &mut scores, i);
             if mv == excluded || !b.is_legal(mv) {
                 continue;
