@@ -77,6 +77,9 @@ params! {
     SprTtAge = 0, 0, 16;
     SprCheckSee = 0, 0, 1;
     SprAllIir = 0, 0, 12;
+    // Search sprint 8 (owner's ideas): percent extra clock time; each 0 = off.
+    SprTmPhase = 0, 0, 100;
+    SprTmSurprise = 0, 0, 100;
 }
 
 static mut GENERATION: u32 = 0;

@@ -159,6 +159,8 @@ pub struct Searcher {
     pondering: bool,
     /// The expected reply to the best move (second PV move), for "bestmove ... ponder ...".
     pub ponder_move: Move,
+    /// After the last search: the hash after our move, and after our move plus the expected reply (0 = unknown).
+    expect: (u64, u64),
 }
 
 const CORR_SIZE: usize = 16384;
@@ -298,6 +300,7 @@ impl Searcher {
             ponder: Arc::new(AtomicBool::new(false)),
             pondering: false,
             ponder_move: Move::NULL,
+            expect: (0, 0),
         }
     }
 
@@ -564,6 +567,22 @@ impl Searcher {
         if self.hashes.last() != Some(&board.hash) {
             self.hashes.push(board.hash);
         }
+        // Sprint 8: more clock time in the middlegame, and when the opponent did not play the reply we expected.
+        if self.clock_tm && limits.movetime.is_none() {
+            let mut f = 1.0;
+            if p(P::SprTmPhase) > 0 {
+                let minors = (board.pieces[KNIGHT] | board.pieces[BISHOP]).count_ones();
+                let phase = minors + 2 * board.pieces[ROOK].count_ones() + 4 * board.pieces[QUEEN].count_ones();
+                if (8..=20).contains(&phase) {
+                    f *= 1.0 + p(P::SprTmPhase) as f64 / 100.0;
+                }
+            }
+            let n = self.hashes.len();
+            if p(P::SprTmSurprise) > 0 && self.expect.1 != 0 && n >= 2 && self.hashes[n - 2] == self.expect.0 && board.hash != self.expect.1 {
+                f *= 1.0 + p(P::SprTmSurprise) as f64 / 100.0;
+            }
+            self.soft_ms = ((self.soft_ms as f64 * f) as u64).min(self.hard_ms);
+        }
         if nnue::active() {
             nnue::refresh(board, &mut self.acc[0]);
         }
@@ -691,6 +710,14 @@ impl Searcher {
                     self.ponder_move = e.mv;
                 }
             }
+        }
+        self.expect = (0, 0);
+        if !best_move.is_null() && !self.ponder_move.is_null() {
+            let mut nb = *board;
+            nb.make_move(best_move);
+            let after = nb.hash;
+            nb.make_move(self.ponder_move);
+            self.expect = (after, nb.hash);
         }
         (best_move, best_score)
     }
