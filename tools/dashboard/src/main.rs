@@ -2002,7 +2002,9 @@ impl App {
             }
         }
         if path == "/" || path == "/index.html" {
-            return ("200 OK", INDEX.to_string(), "text/html; charset=utf-8");
+            // The page from the source tree when it is there (edits show without a rebuild), else the built-in copy.
+            let page = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/index.html")).unwrap_or_else(|_| INDEX.to_string());
+            return ("200 OK", page, "text/html; charset=utf-8");
         }
         if path == "/api/runs" {
             let ids = self.refresh_all();

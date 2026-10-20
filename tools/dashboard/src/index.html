@@ -339,7 +339,7 @@ document.addEventListener('click', e => {
       ui.cmpSel = (base.includes(v) ? base.filter(x => x !== v) : base.length < 3 ? [...base, v] : base).join(',');
     } else ui[k] = v;
     saveUi(); render();
-    if (k === 'cmpScope') poll();
+    if (k === 'cmpScope' || k === 'champPick') poll();
   }
   else if (d.act) doAction(d.act);
 });
@@ -911,8 +911,11 @@ function liveGame(g) {
 
 // ---- Championship tab: the latest round robin, with ratings fitted from its games alone ----
 // The newest round robin, or a gauntlet of several of our engines against Stockfish (a "ladder"), whichever is newer.
-const latestChampionship = () => runs.filter(r => r.type === 'roundrobin' || (r.type === 'gauntlet' && /stockfish|ladder|championship/i.test(r.name)))
-  .sort((a, b) => b.created - a.created)[0];
+// The tab can show any recent championship-style event (picked with the chips at the top); the newest by default.
+const champRuns = () => runs.filter(r => r.type === 'roundrobin' || (r.type === 'gauntlet' && /stockfish|ladder|championship|ccrl/i.test(r.name)))
+  .sort((a, b) => b.created - a.created);
+const latestChampionship = () => { const all = champRuns(); return all.find(r => r.id === ui.champPick) || all[0]; };
+const isCcrl = rr => /ccrl/i.test(rr.name);
 // Seconds left in a match: from the recent pace when the server has it (pauses don't stretch it),
 // none while nothing is finishing, else the average since the start.
 const etaSecs = (d, games, total) => d.pace > 0 ? (total - games) / d.pace : d.pace === 0 ? null : d.elapsed / games * (total - games);
@@ -923,7 +926,9 @@ function renderChampionship() {
   const rr = latestChampionship();
   if (!rr) return '<div class="empty">No championship has been played yet.</div>';
   const d = details[rr.id];
-  if (!d || !d.fit) return '<div class="empty">Loading the championship…</div>';
+  const pickRow = () => `<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px">${champRuns().slice(0, 6).map(r => `<button class="btn sm${r.id === rr.id ? ' on' : ''}" data-set="champPick:${esc(r.id)}">${r.status === 'running' ? '● ' : ''}${esc(friendlyText(r.name))}</button>`).join(' ')}</div>`;
+  if (!d || !d.fit) return pickRow() + '<div class="empty">Loading the championship…</div>';
+  if (!d.fit.length) return pickRow() + `<div class="empty">${esc(friendlyText(rr.name))}: waiting for the first games to finish.</div>`;
   const running = rr.status === 'running';
   // Totals per engine from the crosstable.
   const tot = {};
@@ -947,7 +952,7 @@ function renderChampionship() {
     const t = tot[f.name] || [0, 0, 0], n = t[0] + t[1] + t[2];
     const sc = n ? 100 * (t[0] + t[1] / 2) / n : null;
     const ours = isOurs(f.name);
-    const bar = f.err < 250 ? `<div class="cl-track"><div class="cl-err" style="left:${x(f.rating - f.err)}%;width:${x(f.rating + f.err) - x(f.rating - f.err)}%"></div><div class="cl-dot ${ours ? 'ours' : ''}" style="left:${x(f.rating)}%"></div></div>` : `<div class="cl-track"><span class="sub" style="font-size:12px">far above everyone else</span></div>`;
+    const bar = f.err < 250 ? `<div class="cl-track"><div class="cl-err" style="left:${x(f.rating - f.err)}%;width:${x(f.rating + f.err) - x(f.rating - f.err)}%"></div><div class="cl-dot ${ours ? 'ours' : ''}" style="left:${x(f.rating)}%"></div></div>` : `<div class="cl-track"><span class="sub" style="font-size:12px">${n < 30 ? 'too few games for a range yet' : 'far above everyone else'}</span></div>`;
     return `<tr class="${ours ? 'ours' : ''}"><td class="num">${i + 1}</td>
       <td><b>${esc(champName(f.name))}</b>${f.anchor ? ' <span class="pill">fixed anchor</span>' : ''}</td>
       <td class="num"><b>${f.rating.toFixed(0)}</b>${f.anchor ? '' : `<span class="sub"> ±${f.err.toFixed(0)}</span>`}</td>
@@ -967,8 +972,11 @@ function renderChampionship() {
     return `<td class="xc ${tone}" style="--a:${Math.min(1, Math.abs(s - 0.5) * 2.2).toFixed(2)}" title="${esc(champName(r.name))} vs ${esc(champName(c.name))}: +${v[0]} =${v[1]} −${v[2]}">${(100 * s).toFixed(0)}%<span>${n}</span></td>`;
   }).join('')}</tr>`).join('');
 
-  return `<div class="panel run">
-    <h3><span class="dot ${running ? 'running' : 'finished'}"></span>${esc(friendlyText(rr.name))} <span class="pill">round robin</span> <span class="pill">${esc(rr.tc || '10+0.1')}</span> <span class="pill">${running ? 'running' : 'finished'}</span></h3>
+  const how = isCcrl(rr)
+    ? "Ratings here come only from this event's games, on the CCRL Blitz scale: each reference engine is fixed at its published CCRL Blitz (1 CPU) rating. Local 2'+1\" on this PC, so an estimate on that scale, not an official CCRL rating. Early numbers are provisional."
+    : "Ratings here come only from this event's games, with Elo-limited Stockfish fixed at its setting as the anchor.";
+  return `${pickRow()}<div class="panel run">
+    <h3><span class="dot ${running ? 'running' : 'finished'}"></span>${esc(friendlyText(rr.name))} <span class="pill">${rr.type === 'gauntlet' ? 'gauntlet' : 'round robin'}</span> <span class="pill">${esc(rr.tc || '10+0.1')}</span> <span class="pill">${running ? 'running' : 'finished'}</span></h3>
     <div class="sub" style="margin-top:4px">${esc(d.notes || '')}</div>
     <div class="cards">
       <div class="card wide"><div class="k">Games played</div><div class="v">${games.toLocaleString()} <span class="sub" style="font-size:.55em">/ ${total.toLocaleString()} · ${p.toFixed(1)}%</span></div>
@@ -977,7 +985,7 @@ function renderChampionship() {
       <div class="card"><div class="k">Best Pawnstorm</div>${(() => { const b = fit.find(f => isOurs(f.name)); return b ? `<div class="v" style="font-size:18px;margin-top:6px">${esc(champName(b.name))}</div><div class="d">${b.rating.toFixed(0)} ±${b.err.toFixed(0)}</div>` : '<div class="v">–</div>'; })()}</div>
     </div>
     <h4>Standings</h4>
-    <p class="lead" style="margin:0 0 10px">Ratings here come only from this event's games, with Elo-limited Stockfish fixed at its setting as the anchor. The bar shows each rating with its 95% range: where two ranges overlap, the order between them isn't settled yet. More games narrow them.</p>
+    <p class="lead" style="margin:0 0 10px">${how} The bar shows each rating with its 95% range: where two ranges overlap, the order between them isn't settled yet. More games narrow them.</p>
     <div class="cl-wrap"><table class="cl"><thead><tr><th>#</th><th>Engine</th><th class="num">Rating</th><th class="num">Score</th><th class="num">W / D / L</th><th></th></tr></thead><tbody>${ladder}</tbody></table></div>
     <h4>Head to head</h4>
     <p class="lead" style="margin:0 0 10px">Each cell is the row engine's score against the column engine (small number = games played). Green: row engine ahead, red: behind.</p>
