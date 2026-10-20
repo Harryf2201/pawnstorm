@@ -577,10 +577,12 @@ impl Board {
         if crate::params::p(crate::params::P::SprSeePin) > 0 {
             for (c, pin) in pins.iter_mut().enumerate() {
                 let k = self.king_sq(c);
-                let mut snipers = ((rook_attacks(k, 0) & rooks) | (bishop_attacks(k, 0) & bishops)) & self.colors[c ^ 1] & occ;
+                // Pins of the actual position (before the exchange); a pin lapses once its pinner is captured.
+                let full = self.occ();
+                let mut snipers = ((rook_attacks(k, 0) & rooks) | (bishop_attacks(k, 0) & bishops)) & self.colors[c ^ 1];
                 while snipers != 0 {
                     let s = pop_lsb(&mut snipers);
-                    let b = between(k, s) & occ;
+                    let b = between(k, s) & full;
                     if b.count_ones() == 1 && b & self.colors[c] != 0 {
                         pin.0 |= b;
                         pin.1 |= bit(s);
