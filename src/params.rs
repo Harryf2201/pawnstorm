@@ -80,6 +80,10 @@ params! {
     // Search sprint 8 (owner's ideas): percent extra clock time; each 0 = off.
     SprTmPhase = 0, 0, 100;
     SprTmSurprise = 0, 0, 100;
+    // Search sprint 9 (Codex's ranked ideas): each 0 = off.
+    SprQsCont = 0, 0, 1;
+    SprQuietChk = 0, 0, 1;
+    SprSeePin = 0, 0, 1;
 }
 
 static mut GENERATION: u32 = 0;

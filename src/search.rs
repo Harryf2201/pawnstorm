@@ -489,6 +489,12 @@ impl Searcher {
         }
     }
 
+    fn gives_check(b: &Board, mv: Move) -> bool {
+        let mut nb = *b;
+        nb.make_move(mv);
+        nb.in_check()
+    }
+
     fn captured_type(b: &Board, mv: Move) -> usize {
         if mv.is_ep() || !mv.is_capture() {
             PAWN
@@ -1030,7 +1036,10 @@ impl Searcher {
                 continue;
             }
             let is_quiet = mv.is_quiet();
-            if is_quiet && skip_quiets {
+            // Sprint 9: quiet checks are exempt from move-count and futility pruning (worked out only when needed).
+            let mut gc: Option<bool> = None;
+            let chk_on = p(P::SprQuietChk) > 0;
+            if is_quiet && skip_quiets && !(chk_on && *gc.get_or_insert_with(|| Self::gives_check(b, mv))) {
                 continue;
             }
 
@@ -1039,11 +1048,15 @@ impl Searcher {
                     let lmp_limit = (p(P::LmpBase) + depth * depth) / (2 - improving as i32);
                     if depth <= 8 && legal >= lmp_limit {
                         skip_quiets = true;
-                        continue;
+                        if !(chk_on && *gc.get_or_insert_with(|| Self::gives_check(b, mv))) {
+                            continue;
+                        }
                     }
                     if !in_check && depth <= 8 && eval + p(P::FutBase) + p(P::FutMul) * depth <= alpha {
                         skip_quiets = true;
-                        continue;
+                        if !(chk_on && *gc.get_or_insert_with(|| Self::gives_check(b, mv))) {
+                            continue;
+                        }
                     }
                     // History pruning: quiet moves that have kept failing elsewhere.
                     if !in_check && depth <= 4 && scores[i] < -p(P::HistPrune) * depth {
@@ -1330,6 +1343,10 @@ impl Searcher {
             self.tt.prefetch(nb.hash);
             self.nnue_update(b, mv, ply);
             legal += 1;
+            // Sprint 9: the child's continuation history/correction sees this move, not a stale sibling's.
+            if p(P::SprQsCont) > 0 {
+                self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
+            }
             self.hashes.push(nb.hash);
             let score = -self.qsearch(&nb, -beta, -alpha, ply + 1);
             self.hashes.pop();

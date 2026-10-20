@@ -572,10 +572,29 @@ impl Board {
         let bishops = self.pieces[BISHOP] | self.pieces[QUEEN];
         let rooks = self.pieces[ROOK] | self.pieces[QUEEN];
         let mut res = 1;
+        // Sprint 9: a piece pinned to its king cannot recapture while its pinner is still on the board.
+        let mut pins = [(0u64, 0u64); 2];
+        if crate::params::p(crate::params::P::SprSeePin) > 0 {
+            for (c, pin) in pins.iter_mut().enumerate() {
+                let k = self.king_sq(c);
+                let mut snipers = ((rook_attacks(k, 0) & rooks) | (bishop_attacks(k, 0) & bishops)) & self.colors[c ^ 1] & occ;
+                while snipers != 0 {
+                    let s = pop_lsb(&mut snipers);
+                    let b = between(k, s) & occ;
+                    if b.count_ones() == 1 && b & self.colors[c] != 0 {
+                        pin.0 |= b;
+                        pin.1 |= bit(s);
+                    }
+                }
+            }
+        }
         loop {
             stm ^= 1;
             attackers &= occ;
-            let my = attackers & self.colors[stm];
+            let mut my = attackers & self.colors[stm];
+            if pins[stm].1 & occ != 0 {
+                my &= !pins[stm].0;
+            }
             if my == 0 {
                 break;
             }
