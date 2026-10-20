@@ -104,6 +104,13 @@ Versions: v1.12 (240-round gen4 net + SPSA run 2), v1.13 (gen5 net + forced-move
 | Sprint 4: hindsight depth (parent reduction + eval change; fixed after Codex review) | +10.6 +/- 5.3 | Candidate | branch sprint4 SprHindsight |
 | Capture futility pruning | +0.2 | Dropped | SprCaptFut |
 | Result weight 0.25 / 0.55 / 0.7 (v1.15 recipe, hold-out loss vs 0.011055 at 0.4) | 0.011122 / 0.010951 / 0.011287 | 0.55 to SPRT | net-w25, net-w55, net-w70 |
+| Result weight 0.5 / 0.6 (hold-out) | 0.010989 / 0.011134 | 0.55 stays best | net-w50, net-w60 |
+| v1.16 (six search winners + wdl 0.55 net) vs v1.14 | +22.7 +/- 4.4 (7200 g, 8+0.08); +20.7 +/- 6.1 (2400 g, 40+0.4) | Released as v1.16; 2.0 gate failed narrowly (3222 +/- 28) | branch sprint4 |
+| Sprint 5 (Codex ideas): eval feedback into history / TT ProbCut / child cutoff-count LMR | -14.4 / -5.4 / -9.4 | Dropped | branch sprint5 |
+| Sprint 6: score-drop time extension / symmetric eval-history feedback (vs v1.16) | +0.9 / -6.8 | Dropped | branch sprint6 |
+| Sprint 7 (Codex code review, vs v1.16): qsearch draw checks / qsearch promo+ep futility / killer history LMR / age-aware TT / no ext for losing checks / IIR at all-nodes | -1.6 / -0.5 / -8.5 / -7.0 / -4.3 / -22.5 | Dropped | branch sprint7 |
+| gen5/gen6 75/25 network (800M, wdl 0.55, v1.16 search) vs v1.16 | -0.7 +/- 4.1 (7200 g); hold-out 0.011087 vs 0.010951 | Level, not used | net-g56 |
+| Championship 7 (13 engines, 10+0.1, clean games only) | v1.16 3227, v1.15 3226, v1.14 3209 (+/-38); SF full 3589, PlentyChess 3552, RubiChess 3447 | Ended early after a lab pause; 2736 later games excluded | runs/2026-10-19_151514 |
 
 Tooling added: held-out validation (testing\datagen\holdout-gen6, trainer -Val, tools/net-check.sh: validation loss matched every
 SPRT direction except where speed differed); cloud test matches on GitHub runners (tools/cloud-test.ps1, test-match workflow);
