@@ -305,6 +305,7 @@ impl Searcher {
     }
 
     pub fn clear(&mut self) {
+        self.expect = (0, 0);
         *self.butterfly = [[[[[0; 64]; 64]; 2]; 2]; 2];
         *self.capt_hist = [[[0; 6]; 64]; 12];
         self.cont1.fill(0);
@@ -699,6 +700,8 @@ impl Searcher {
         while (limits.infinite || (self.pondering && self.ponder.load(Ordering::Relaxed))) && !self.stop.load(Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+        // A ponder search stopped without "ponderhit" was on a move the opponent did not play.
+        let ponder_miss = self.pondering && self.ponder.load(Ordering::Relaxed);
         self.pondering = false;
         if self.pv_len[0] >= 2 && self.pv[0][0] == best_move {
             self.ponder_move = self.pv[0][1];
@@ -710,6 +713,10 @@ impl Searcher {
                     self.ponder_move = e.mv;
                 }
             }
+        }
+        // Keep the expectation from our real move when the ponder search was a miss.
+        if ponder_miss {
+            return (best_move, best_score);
         }
         self.expect = (0, 0);
         if !best_move.is_null() && !self.ponder_move.is_null() {
