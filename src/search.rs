@@ -1,5 +1,6 @@
 //! Principal variation search with the standard modern pruning/reduction toolkit.
 
+use crate::attacks::{bishop_attacks, queen_attacks, rook_attacks, KING_ATTACKS, KNIGHT_ATTACKS, PAWN_ATTACKS};
 use crate::board::*;
 use crate::eval::evaluate;
 use crate::nnue::{self, AccPair, Accumulator};
@@ -145,6 +146,8 @@ pub struct Searcher {
     /// False for the extra Lazy-SMP threads: they search the same position to fill the shared
     /// hash table, while the main thread alone ages the table, manages time and picks the move.
     pub main_thread: bool,
+    /// Ply at which the current quiescence search was entered from the main search (sprint 11).
+    qs_root: usize,
     /// This thread's node count, published every 2048 nodes so the main thread can report the total.
     pub shared_nodes: Arc<AtomicU64>,
     /// The helper threads' published counts (main thread only; for "info nodes/nps").
@@ -291,6 +294,7 @@ impl Searcher {
             stopped: false,
             print: true,
             main_thread: true,
+            qs_root: 0,
             shared_nodes: Arc::new(AtomicU64::new(0)),
             helper_nodes: Vec::new(),
             nmp_min_ply: 0,
@@ -699,6 +703,7 @@ impl Searcher {
         self.pv_len[ply] = ply;
 
         if depth <= 0 {
+            self.qs_root = ply;
             return self.qsearch(b, alpha, beta, ply);
         }
         if self.nodes & 2047 == 0 {
@@ -828,6 +833,7 @@ impl Searcher {
             }
             // Razoring: hopelessly below alpha at low depth, just check captures.
             if depth <= 3 && eval + p(P::RazorMargin) * depth < alpha {
+                self.qs_root = ply;
                 let s = self.qsearch(b, alpha, beta, ply);
                 if s < beta {
                     return s;
@@ -1048,6 +1054,10 @@ impl Searcher {
                     r += (is_quiet && !tt_move.is_null() && tt_move.is_capture()) as i32 * p(P::SprTtCaptLmr);
                     r += !improving as i32;
                     r -= nb.in_check() as i32;
+                    // Sprint 11: quiet moves that bring a piece to bear on the enemy king's ring (Qf3, Rd3 before a sacrifice).
+                    if is_quiet && p(P::SprKingAtk) > 0 && Self::hits_king_ring(&nb, mv.to()) {
+                        r -= p(P::SprKingAtk);
+                    }
                     if is_quiet && p(P::SprCorrLmr) > 0 {
                         r -= (corr_mag / p(P::SprCorrLmr)).min(2);
                     }
@@ -1165,6 +1175,34 @@ impl Searcher {
         best
     }
 
+    /// Sprint 11: a losing capture worth a look anyway: it gives check, or (SprQsChkSac 2) it lands next to the enemy king.
+    fn king_sac(&self, b: &Board, mv: Move) -> bool {
+        let ksq = b.king_sq(b.stm ^ 1);
+        if p(P::SprQsChkSac) >= 2 && KING_ATTACKS[ksq] & bit(mv.to()) != 0 {
+            return true;
+        }
+        let mut nb = *b;
+        nb.make_move(mv);
+        nb.in_check()
+    }
+
+    /// Sprint 11: after a move (`nb`, opponent to move), does the piece now on `to` attack the opponent king or a square next to it?
+    fn hits_king_ring(nb: &Board, to: usize) -> bool {
+        let ksq = nb.king_sq(nb.stm);
+        let ring = KING_ATTACKS[ksq] | bit(ksq);
+        let pc = nb.mailbox[to] as usize;
+        let occ = nb.occ();
+        let att = match pc % 6 {
+            PAWN => PAWN_ATTACKS[pc / 6][to],
+            KNIGHT => KNIGHT_ATTACKS[to],
+            BISHOP => bishop_attacks(to, occ),
+            ROOK => rook_attacks(to, occ),
+            QUEEN => queen_attacks(to, occ),
+            _ => 0,
+        };
+        att & ring != 0
+    }
+
     fn qsearch(&mut self, b: &Board, mut alpha: i32, beta: i32, ply: usize) -> i32 {
         self.pv_len[ply] = ply;
         if self.nodes & 2047 == 0 {
@@ -1225,9 +1263,11 @@ impl Searcher {
             }
             if !in_check {
                 if !b.see(mv, 0) {
-                    continue;
-                }
-                if futility <= alpha && !b.see(mv, 1) {
+                    // Sprint 11: sacrifices against the king (Bxg6+, Rxg7) at the first quiescence ply.
+                    if !(p(P::SprQsChkSac) > 0 && ply == self.qs_root && mv.is_capture() && self.king_sac(b, mv)) {
+                        continue;
+                    }
+                } else if futility <= alpha && !b.see(mv, 1) {
                     best = best.max(futility);
                     continue;
                 }

@@ -63,6 +63,11 @@ params! {
     // Search sprint 4: each 0 = off.
     SprHindsight = 1, 0, 1;
     SprCaptFut = 0, 0, 400;
+    // Search sprint 11 (from the Lichess loss review): each 0 = off.
+    // 1: at the first quiescence ply, also try losing captures that give check; 2: also losing captures next to the enemy king.
+    SprQsChkSac = 0, 0, 2;
+    // Reduce quiet moves that newly attack the enemy king's ring this many plies less.
+    SprKingAtk = 0, 0, 2;
 }
 
 static mut GENERATION: u32 = 0;
