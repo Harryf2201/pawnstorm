@@ -116,3 +116,18 @@ Tooling added: held-out validation (testing\datagen\holdout-gen6, trainer -Val, 
 SPRT direction except where speed differed); cloud test matches on GitHub runners (tools/cloud-test.ps1, test-match workflow);
 match.ps1 -Nodes; prepare-data -SampleRate. Fixed: engines leaked a network copy per EvalFile resend (OOM in long matches);
 watchdog RAM rule could freeze the lab (pausing does not free memory).
+
+## Oct 20-21: 2.0, time management, Codex search ideas, CCRL Blitz-scale estimate
+
+| Experiment | Result | Verdict | Where |
+|---|---|---|---|
+| All gen5 + gen6 network (1.24B, wdl 0.55, v1.16 search) vs v1.16 | +10.8 (7200 g) | Kept: 2.0's network | net-g56all |
+| SPSA run 4 settings (v1.16 search, 1715 rounds x 7 pairs) vs v1.16 | -0.9 +/- 3.8 (7200 g) | Dropped; big retunes stopped (only small targeted ones from now on) | testing\spsa |
+| Sprint 8 (owner's ideas, vs 2.0): +50% / +25% soft time after an unexpected reply; +20% in the middlegame (material phase 8-20) | -2.3 / -6.2 / -4.6 (+/-3.5, 7200 g each) | Dropped (a score-drop-gated version vs stronger engines is a possible later idea) | branch sprint8 |
+| Sprint 9 (Codex's ranked ideas, vs 2.0): quiet checks exempt from LMP/futility / SEE ignores pinned recapturers / qsearch continuation context | +3.2 / -4.7 / -9.9 (+/-3.8, 7200 g each) | Quiet checks: confirmation run; others dropped | branch sprint9 |
+| Local CCRL Blitz-scale benchmark: 2.0 vs 12 CCRL Blitz-rated engines (3292-3747), 2'+1", 1 thread, P-cores only, identical openings per opponent, Ordo with fixed anchors | 3557 +/- 58 (104 g); 3561 +/- 54 on the first 69 g (gauntlet with uneven openings); 3559 +/- 39 combined | Estimate on the CCRL Blitz scale (local 2+1, not an official rating) | testing\ccrl-bench, runs/2026-10-20_232145 |
+
+Tooling added: testing\ccrl-bench (reference-engine manifest with CCRL ratings and hashes, bench.ps1 per-pairing scheduler
+with per-core pinning and exact resume, Ordo 1.2.6 with fixed and loose anchors). Found: fastchess -use-affinity did not pin
+engine processes on Windows (process affinity on fastchess is inherited instead); in multi-engine gauntlets fastchess assigns
+openings per pairing, so pairings get different, repeating openings; fastchess -config resume only works for two-engine matches.
