@@ -70,7 +70,7 @@ jobs:
           # Distinct seed per job: run id and shard number mixed together.
           seed=$(( (${{ github.run_id }} * 1000 + ${{ matrix.shard }}) % 9007199254740991 ))
           echo "cores: $(nproc), seed: $seed"
-          ./target/release/pawnstorm datagen "$(nproc)" 1000000000000 ${{ inputs.soft_nodes }} "$out" $(( ${{ inputs.minutes }} * 60 )) "$seed" | tr '\r' '\n' | tail -n 3
+          ./target/release/pawnstorm datagen "$(nproc)" 1000000000000 ${{ inputs.soft_nodes }} "$out" $(( ${{ inputs.minutes }} * 60 )) "$seed" --openings openings/gen7-human.uci --opening-percent 50 --deny openings/testbook-starts.fen | tr '\r' '\n' | tail -n 3
           cat "$out/status.txt"
 
       - name: Compress

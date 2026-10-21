@@ -8,7 +8,9 @@ param(
     [int]$Idle = 14,
     [string]$Name = 'gen3-v13-5k',
     [string]$Exe = 'pawnstorm-datagen-gen3',
-    [int64]$Target = 1000000000
+    [int64]$Target = 1000000000,
+    # Extra datagen flags, e.g. the real-opening starts: --openings <file> --opening-percent 50 --deny <file>
+    [string[]]$Extra = @()
 )
 . "$PSScriptRoot\paths.ps1"
 $dir = "$LabRoot\datagen\$Name"
@@ -18,7 +20,7 @@ function Log($m) { Add-Content $log "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $
 function Start-Datagen($threads) {
     Get-Process pawnstorm-datagen* -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep 2
-    $p = Start-Process "$LabRoot\engines\$Exe.exe" -ArgumentList 'datagen', $threads, $Target, 5000, $dir `
+    $p = Start-Process "$LabRoot\engines\$Exe.exe" -ArgumentList (@('datagen', $threads, $Target, 5000, $dir) + $Extra) `
         -RedirectStandardOutput "$dir\stdout.txt" -RedirectStandardError "$dir\stderr.txt" -WindowStyle Hidden -PassThru
     Start-Sleep 1
     $p.PriorityClass = 'BelowNormal'

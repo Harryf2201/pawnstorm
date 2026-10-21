@@ -7,7 +7,7 @@ while true; do
   ts=$(date -u +%Y%m%d-%H%M%S)
   d=~/work/seg-$ts
   mkdir -p "$d"
-  ~/pawnstorm/target/release/pawnstorm datagen "$(nproc)" 1000000000 5000 "$d" 3600 > "$d/stdout.txt" 2>&1
+  ~/pawnstorm/target/release/pawnstorm datagen "$(nproc)" 1000000000 5000 "$d" 3600 --openings ~/pawnstorm/openings/gen7-human.uci --opening-percent 50 --deny ~/pawnstorm/openings/testbook-starts.fen > "$d/stdout.txt" 2>&1
   gzip "$d"/data_*.txt
   mv "$d" ~/outbox/seg-$ts
 done
