@@ -146,3 +146,4 @@ h-pawn storms that even the deeper search missed one move earlier. 2 losses were
 Opening report over all 597 bot games (openings.py): as Black, 1.e4 e6 3.Nc3 Nf6 4.e5 scored 29% (50 games), 1...c5 60%,
 2.Nf3 e6 3.d4 37%, 2...d6 54%. This led to a small bot-only polyglot book (1...c5, 2...d6, a weighted mix of first moves
 as White, 7.Bg5 in the QGD exchange line).
+| Exact i8 feature-weight table + per-row i16 correction lists (7,149 exceptions, 818 KB vs 1.5 MB; Codex) | Bit-exact (635k differential updates, identical nodes) on AVX2 and NEON; bench: PC 4.2% slower, ARM about 1% slower | Dropped: the cache saving does not pay for the sign-extension and fixups | branch i8w |
