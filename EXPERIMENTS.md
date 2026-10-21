@@ -131,3 +131,7 @@ Tooling added: testing\ccrl-bench (reference-engine manifest with CCRL ratings a
 with per-core pinning and exact resume, Ordo 1.2.6 with fixed and loose anchors). Found: fastchess -use-affinity did not pin
 engine processes on Windows (process affinity on fastchess is inherited instead); in multi-engine gauntlets fastchess assigns
 openings per pairing, so pairings get different, repeating openings; fastchess -config resume only works for two-engine matches.
+| Sprint 10 (Codex ideas 4-5, vs 2.0): time from the latest iteration's node share / wider RFP margin when the correction is large | -17.3 / -7.4 (7200 g each) | Dropped | branch sprint10 |
+| Quiet checks exempt from LMP/futility, confirmation and long TC (vs 2.0) | +2.1 +/- 3.8 (7200 g, 8+0.08); -1.3 +/- 5.3 (2400 g, 40+0.4) | Not kept (too small); candidate for a later combined test | sprint9 SprQuietChk |
+| 1024-wide multi-layer network on all gen5+gen6 (2.0 recipe), vs 2.0 | hold-out 0.010718 vs 0.010896; +2.5 +/- 4.2 (7200 g, 8+0.08); +4.3 +/- 5.9 and +6.4 +/- 5.7 (2x2400 g, 40+0.4); 23% slower on the PC, 16% on ARM; ARM node-identical | Better at longer time controls: candidate for the bot (v2.1) and the size for gen7 nets | net-g56all-1024, branch w1024 |
+| Gen7 real-opening starts: 100k human 2200+ Lichess lines (Sept 2026), 50% of games + 0-4 random plies, test-book start positions denied | Running on GitHub (next batch), Oracle (from 2026-10-21 07:39 UTC, oracle-gen7o), PC (gen7o-v20-5k) | Gen7 data from here on | openings/, tools/openings |
