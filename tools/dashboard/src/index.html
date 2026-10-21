@@ -802,12 +802,29 @@ function renderVersions(m) {
     }
     return h + '</div>';
   };
+  // Versions that made it stay open; failed/shelved experiments and undescribed test engines are folded away.
+  const groups = { kept: [], dropped: [], other: [] };
+  for (const e of list) {
+    const st = e.c ? e.c.status : '';
+    if (!e.c) groups.other.push(e);
+    else if (['failed', 'shelved'].includes(st) || (st === 'testing' && !(e.p && e.p.live))) groups.dropped.push(e);
+    else groups.kept.push(e);
+  }
+  const group = (key, title, note, items) => {
+    if (!items.length) return '';
+    const open = isOpen(key);
+    return `<div class="panel" style="margin-top:16px"><div class="now-row" data-toggle="${key}" style="border:0;cursor:pointer"><span class="chev2">${open ? '▾' : '▸'}</span>
+      <div class="now-main"><div class="now-t">${title} (${items.length})</div><div class="now-d">${note}</div></div></div>
+      ${open ? `<div class="vlist" style="margin-top:10px">${items.map(card).join('')}</div>` : ''}</div>`;
+  };
   return `<h2>Engine versions</h2>
     <p class="lead">Each version of Pyther, as described in versions.ini. Ratings are computed live from every game played; the bar shows the level on a shared scale (${lo}–${hi}) and the thin line is the margin of error.</p>
     <div class="toolbar"><span class="sub">Order</span>
       <button class="btn sm ${ui.sort !== 'rating' ? 'on' : ''}" data-set="sort:order">Version order</button>
       <button class="btn sm ${ui.sort === 'rating' ? 'on' : ''}" data-set="sort:rating">Strongest first</button></div>
-    <div class="vlist">${list.map(card).join('')}</div>`;
+    <div class="vlist">${groups.kept.map(card).join('')}</div>
+    ${group('vgroup:dropped', "Experiments that didn’t make it", 'failed, shelved or never finished; kept for the record', groups.dropped)}
+    ${group('vgroup:other', 'Other test engines', 'search sprints, settings and network tests that are not described in versions.ini (results are in EXPERIMENTS.md)', groups.other)}`;
 }
 
 // ---- Tournaments ----
