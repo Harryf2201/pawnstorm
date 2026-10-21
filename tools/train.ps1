@@ -8,7 +8,8 @@ param(
     [string]$Wdl = '0.4',   # constant, or 'start-end' to rise linearly over training
     [int]$Hidden = 512,
     [int]$Buckets = 1,
-    [ValidateSet('768', 'kb10', 'kb4', 'ml', 'ml32', 'mlkb4')][string]$Inputs = '768',
+    [ValidateSet('768', 'kb10', 'kb4', 'ml', 'ml32', 'mlkb4', 'mlthr')][string]$Inputs = '768',
+    [string]$Val = '',   # held-out bulletformat file (name in the training data folder, or a full path): reports validation loss
     [switch]$Build
 )
 
@@ -32,7 +33,13 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 $dataPath = "$Root\data\$Data.bin"
 if (-not (Test-Path $dataPath)) { throw "No prepared data at $dataPath (run prepare-data.ps1)" }
 
+$extra = @()
+if ($Val) {
+    $valPath = if (Test-Path $Val) { $Val } else { "$Root\data\$Val.bin" }
+    if (-not (Test-Path $valPath)) { throw "No validation data at $valPath" }
+    $extra = @("val=$valPath")
+}
 $p = Start-Process -FilePath "$trainer\target\release\trainer.exe" `
-    -ArgumentList $Name, $dataPath, "$dir\checkpoints", $Superbatches, $Wdl, $Hidden, $Buckets, $Inputs `
+    -ArgumentList (@($Name, $dataPath, "$dir\checkpoints", $Superbatches, $Wdl, $Hidden, $Buckets, $Inputs) + $extra) `
     -RedirectStandardOutput "$dir\log.txt" -RedirectStandardError "$dir\err.txt" -WindowStyle Hidden -PassThru
 "Training '$Name' started (pid $($p.Id)) -> $dir"

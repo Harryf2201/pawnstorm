@@ -16,3 +16,4 @@ config.json
 # Stockfish 19 WebAssembly builds for in-browser analysis (downloaded, ~100 MB)
 tools/dashboard/sf/
 
+/target-*

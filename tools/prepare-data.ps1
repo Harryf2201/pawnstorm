@@ -6,7 +6,10 @@ param(
     [Parameter(Mandatory)][string]$Name,
     [int]$ShuffleMemMb = 8000,
     # Stop after this many positions (0 = use everything).
-    [int64]$MaxPositions = 0
+    [int64]$MaxPositions = 0,
+    # Keep each position with this probability (0..1), so a capped mix samples every source evenly instead
+    # of filling up from the first sources listed. 1 = keep everything.
+    [double]$SampleRate = 1.0
 )
 
 . "$PSScriptRoot\paths.ps1"
@@ -30,10 +33,11 @@ if (Test-Path $bash) {
     $plain = ($files | Where-Object { $_.Extension -eq '.txt' } | ForEach-Object { & $q $_.FullName }) -join ' '
     $gzips = ($files | Where-Object { $_.Extension -eq '.gz' } | ForEach-Object { & $q $_.FullName }) -join ' '
     $limit = if ($MaxPositions -gt 0) { "head -n $MaxPositions" } else { 'cat' }
+    $sample = if ($SampleRate -lt 1) { "awk -v p=$SampleRate 'BEGIN { srand(20261019) } rand() < p' |" } else { '' }
     $script = "$out\prep-$Name.sh"
     $lines = @(
         "{ $(if ($plain) { "cat $plain;" }) $(if ($gzips) { "zcat $gzips;" }) } 2>/dev/null |",
-        "  grep -aE '^[^|]+ [wb] [^|]+ \| -?[0-9]+ \| (1\.0|0\.5|0\.0)$' | $limit > $(& $q $text)",
+        "  grep -aE '^[^|]+ [wb] [^|]+ \| -?[0-9]+ \| (1\.0|0\.5|0\.0)$' | $sample $limit > $(& $q $text)",
         "wc -l < $(& $q $text)"
     )
     [IO.File]::WriteAllText($script, ($lines -join "`n") + "`n")

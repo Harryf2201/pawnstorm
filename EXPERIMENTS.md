@@ -69,3 +69,69 @@ Elo below is from SPRT/self-play unless it says "vs Stockfish". ± is the 95% ma
 | PC → Oracle server hosting, failover timer, datagen pauses during games | Plays 24/7 | `tools\oracle\`, README |
 | Re-challenges at other time controls, rapid fallback | More games found | lichess-bot config |
 | v1.9 → v1.10 search + pondering → v1.11 | Ratings rising (rapid ~2897) | Oracle `~/pawnstorm-v111` |
+
+## Oct 16-19: toward 2.0
+
+Versions: v1.12 (240-round gen4 net + SPSA run 2), v1.13 (gen5 net + forced-move clock + TT eval fix), v1.14 (768-wide gen5 net,
+3218 +/- 9), v1.15 (768 on gen5 only; level with v1.14 head to head, better against limited Stockfish). See versions.ini.
+
+| Experiment | Result | Verdict | Where |
+|---|---|---|---|
+| Forced-move clock saving (ChatGPT) | +5.0 +/- 4.7 (4000 g) | Kept (v1.13) | codex/forced-clock-20261016 |
+| TT raw static eval fix (ChatGPT) | +7.4 +/- 8.3 (1460 g) | Kept (v1.13) | codex/tt-static-eval-20261016 |
+| gen5 network (512) | +18.3 +/- 7.9 | Kept (v1.13) | net-gen5a |
+| 768-wide gen5 network | +15.5 +/- 7.8 | Kept (v1.14) | branch w768, net-gen5w |
+| 400 training rounds (vs 240) | -0.5 | Dropped | net-gen5b |
+| 4-ply continuation history | -0.2 | Dropped | branch cont4 |
+| AVX2 4-sum dot (x86) | identical, no speed gain | Dropped | dot-lab |
+| Rising result weight 0.2 -> 0.6 | +0.4 | Dropped | net-r1 |
+| 32-neuron first hidden layer | -25.8 (15% slower); +5.5 +/- 12 at fixed nodes; best validation loss | Dropped (not worth the speed, even for long games) | branch ml32, net-l32 |
+| 4 king input buckets (multi-layer) | -11.5 | Shelved until much more data | branch mlkb4, net-kb |
+| Threat inputs (attacked-piece features) | +10.9 +/- 14.7 at fixed nodes, but 25-35% slower (-30 +/- 27 at 8+0.08); fused and incremental versions exact but not faster | Shelved until more data | branch threat, net-thr |
+| Quantisation cost (layer 1 in f32 vs 8-bit, fixed nodes) | -1.6 +/- 11.7 | No cost; quantisation-aware training not needed | branch f32l1 |
+| Lazy SMP thread voting (4 threads) | -1.9 +/- 8.9 | Dropped | branch vote |
+| SPSA run 3 (v1.13/v1.14, 1715 rounds) | -4.5 +/- 6.7 (2000 g) | Dropped | testingspsa-run3 | testing\spsa |
+| Search sprint 1 (cloud, 3600 g each): LMR re-search history update | +6.0 +/- 5.4 | Candidate | branch sprint1 SprLmrRes |
+| Negative singular extension (-2) at cut-nodes | +5.2 +/- 5.2 | Candidate | SprSeCutNeg |
+| Cut-node reduction without TT move / capture-TT-move quiet reduction / capture history in SEE / fail-high depth bonus | -1.3 / -0.7 / -1.8 / -4.3 | Dropped | sprint1 |
+| Sprint 2: aspiration fail-high depth reduction | +4.8 +/- 5.5 | Candidate | branch sprint2 SprAspFh |
+| TT-cutoff quiet history / quiescence quiet-evasion pruning | -0.7 / +0.2 | Dropped | sprint2 |
+| Sprint 2: minor / major piece correction histories | -0.6 / -2.9 | Dropped | sprint2 |
+| Sprint 1-2 winners combined (combo1) | +7.3 +/- 3.8 (7200 g) | Kept | sprint3 |
+| Sprint 3: null-move verification at depth >= 12 (Codex idea) | +4.1 +/- 5.1 | Candidate | branch sprint3 SprNmpVerify |
+| Less LMR for quiets when the correction history moved the eval a lot (K=64) | +6.4 +/- 5.2 | Candidate | SprCorrLmr |
+| Search the TT move before scoring the rest | +1.7 | Dropped | SprLazyScore |
+| Sprint 4: hindsight depth (parent reduction + eval change; fixed after Codex review) | +10.6 +/- 5.3 | Candidate | branch sprint4 SprHindsight |
+| Capture futility pruning | +0.2 | Dropped | SprCaptFut |
+| Result weight 0.25 / 0.55 / 0.7 (v1.15 recipe, hold-out loss vs 0.011055 at 0.4) | 0.011122 / 0.010951 / 0.011287 | 0.55 to SPRT | net-w25, net-w55, net-w70 |
+| Result weight 0.5 / 0.6 (hold-out) | 0.010989 / 0.011134 | 0.55 stays best | net-w50, net-w60 |
+| v1.16 (six search winners + wdl 0.55 net) vs v1.14 | +22.7 +/- 4.4 (7200 g, 8+0.08); +20.7 +/- 6.1 (2400 g, 40+0.4) | Released as v1.16; 2.0 gate failed narrowly (3222 +/- 28) | branch sprint4 |
+| Sprint 5 (Codex ideas): eval feedback into history / TT ProbCut / child cutoff-count LMR | -14.4 / -5.4 / -9.4 | Dropped | branch sprint5 |
+| Sprint 6: score-drop time extension / symmetric eval-history feedback (vs v1.16) | +0.9 / -6.8 | Dropped | branch sprint6 |
+| Sprint 7 (Codex code review, vs v1.16): qsearch draw checks / qsearch promo+ep futility / killer history LMR / age-aware TT / no ext for losing checks / IIR at all-nodes | -1.6 / -0.5 / -8.5 / -7.0 / -4.3 / -22.5 | Dropped | branch sprint7 |
+| gen5/gen6 75/25 network (800M, wdl 0.55, v1.16 search) vs v1.16 | -0.7 +/- 4.1 (7200 g); hold-out 0.011087 vs 0.010951 | Level, not used | net-g56 |
+| Championship 7 (13 engines, 10+0.1, clean games only) | v1.16 3227, v1.15 3226, v1.14 3209 (+/-38); SF full 3589, PlentyChess 3552, RubiChess 3447 | Ended early after a lab pause; 2736 later games excluded | runs/2026-10-19_151514 |
+
+Tooling added: held-out validation (testing\datagen\holdout-gen6, trainer -Val, tools/net-check.sh: validation loss matched every
+SPRT direction except where speed differed); cloud test matches on GitHub runners (tools/cloud-test.ps1, test-match workflow);
+match.ps1 -Nodes; prepare-data -SampleRate. Fixed: engines leaked a network copy per EvalFile resend (OOM in long matches);
+watchdog RAM rule could freeze the lab (pausing does not free memory).
+
+## Oct 20-21: 2.0, time management, Codex search ideas, CCRL Blitz-scale estimate
+
+| Experiment | Result | Verdict | Where |
+|---|---|---|---|
+| All gen5 + gen6 network (1.24B, wdl 0.55, v1.16 search) vs v1.16 | +10.8 (7200 g) | Kept: 2.0's network | net-g56all |
+| SPSA run 4 settings (v1.16 search, 1715 rounds x 7 pairs) vs v1.16 | -0.9 +/- 3.8 (7200 g) | Dropped; big retunes stopped (only small targeted ones from now on) | testing\spsa |
+| Sprint 8 (owner's ideas, vs 2.0): +50% / +25% soft time after an unexpected reply; +20% in the middlegame (material phase 8-20) | -2.3 / -6.2 / -4.6 (+/-3.5, 7200 g each) | Dropped (a score-drop-gated version vs stronger engines is a possible later idea) | branch sprint8 |
+| Sprint 9 (Codex's ranked ideas, vs 2.0): quiet checks exempt from LMP/futility / SEE ignores pinned recapturers / qsearch continuation context | +3.2 / -4.7 / -9.9 (+/-3.8, 7200 g each) | Quiet checks: confirmation run; others dropped | branch sprint9 |
+| Local CCRL Blitz-scale benchmark: 2.0 vs 12 CCRL Blitz-rated engines (3292-3747), 2'+1", 1 thread, P-cores only, identical openings per opponent, Ordo with fixed anchors | 3557 +/- 58 (104 g); 3561 +/- 54 on the first 69 g (gauntlet with uneven openings); 3559 +/- 39 combined | Estimate on the CCRL Blitz scale (local 2+1, not an official rating) | testing\ccrl-bench, runs/2026-10-20_232145 |
+
+Tooling added: testing\ccrl-bench (reference-engine manifest with CCRL ratings and hashes, bench.ps1 per-pairing scheduler
+with per-core pinning and exact resume, Ordo 1.2.6 with fixed and loose anchors). Found: fastchess -use-affinity did not pin
+engine processes on Windows (process affinity on fastchess is inherited instead); in multi-engine gauntlets fastchess assigns
+openings per pairing, so pairings get different, repeating openings; fastchess -config resume only works for two-engine matches.
+| Sprint 10 (Codex ideas 4-5, vs 2.0): time from the latest iteration's node share / wider RFP margin when the correction is large | -17.3 / -7.4 (7200 g each) | Dropped | branch sprint10 |
+| Quiet checks exempt from LMP/futility, confirmation and long TC (vs 2.0) | +2.1 +/- 3.8 (7200 g, 8+0.08); -1.3 +/- 5.3 (2400 g, 40+0.4) | Not kept (too small); candidate for a later combined test | sprint9 SprQuietChk |
+| 1024-wide multi-layer network on all gen5+gen6 (2.0 recipe), vs 2.0 | hold-out 0.010718 vs 0.010896; +2.5 +/- 4.2 (7200 g, 8+0.08); +4.3 +/- 5.9 and +6.4 +/- 5.7 (2x2400 g, 40+0.4); 23% slower on the PC, 16% on ARM; ARM node-identical | Better at longer time controls: candidate for the bot (v2.1) and the size for gen7 nets | net-g56all-1024, branch w1024 |
+| Gen7 real-opening starts: 100k human 2200+ Lichess lines (Sept 2026), 50% of games + 0-4 random plies, test-book start positions denied | Running on GitHub (next batch), Oracle (from 2026-10-21 07:39 UTC, oracle-gen7o), PC (gen7o-v20-5k) | Gen7 data from here on | openings/, tools/openings |

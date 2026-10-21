@@ -25,6 +25,48 @@ pub struct Config {
     pub max_seconds: Option<u64>,
     /// Base random seed; each thread mixes in its index. Defaults to the clock.
     pub seed: Option<u64>,
+    /// Real opening lines (UCI moves from the start position, one line per entry; human games, never the
+    /// test book): `opening_percent`% of games start from a random one plus 0-4 random plies, the rest
+    /// from 8-9 random plies as before. Empty = random openings only.
+    pub openings: Vec<Vec<Move>>,
+    pub opening_percent: usize,
+    /// Hashes of the test book's start positions: a game whose opening reaches one is skipped.
+    pub deny: std::collections::HashSet<u64>,
+}
+
+/// Reads a file of FENs (one per line) into position hashes.
+pub fn load_deny(path: &str) -> std::collections::HashSet<u64> {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read deny file {path}: {e}"));
+    let set: std::collections::HashSet<u64> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|l| Board::from_fen(l).unwrap_or_else(|e| panic!("{path}: bad FEN {l}: {e}")).hash)
+        .collect();
+    assert!(!set.is_empty(), "deny file {path} is empty");
+    set
+}
+
+/// Reads an opening file (one line of UCI moves per entry, '#' comments allowed); every line must be legal.
+pub fn load_openings(path: &str) -> Vec<Vec<Move>> {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read opening file {path}: {e}"));
+    let mut lines = Vec::new();
+    for (n, l) in text.lines().enumerate() {
+        let l = l.trim();
+        if l.is_empty() || l.starts_with('#') {
+            continue;
+        }
+        let mut b = Board::startpos();
+        let mut moves = Vec::new();
+        for u in l.split_whitespace() {
+            let m = b.parse_move(u).unwrap_or_else(|| panic!("{path}:{}: illegal move {u}", n + 1));
+            b.make_move(m);
+            moves.push(m);
+        }
+        lines.push(moves);
+    }
+    assert!(!lines.is_empty(), "opening file {path} has no lines");
+    lines
 }
 
 #[derive(Default)]
@@ -79,16 +121,29 @@ fn game_over(b: &Board, hashes: &[u64]) -> Option<f32> {
 }
 
 fn play_game(searcher: &mut Searcher, tt: &TT, rng: &mut Rng, cfg: &Config, stats: &Stats, out: &mut impl Write) -> std::io::Result<()> {
-    // Random opening: 8 or 9 random plies so games (and side to move) vary.
+    // Opening: a real opening line plus 0-4 random plies (opening_percent% of games), else 8 or 9 random
+    // plies, so games (and side to move) vary.
     let mut b = Board::startpos();
     let mut hashes = vec![b.hash];
-    for _ in 0..8 + rng.below(2) {
+    let random_plies = if !cfg.openings.is_empty() && rng.below(100) < cfg.opening_percent {
+        for &m in &cfg.openings[rng.below(cfg.openings.len())] {
+            b.make_move(m);
+            hashes.push(b.hash);
+        }
+        rng.below(5)
+    } else {
+        8 + rng.below(2)
+    };
+    for _ in 0..random_plies {
         let moves = b.legal_moves();
         if moves.is_empty() {
             return Ok(());
         }
         b.make_move(moves[rng.below(moves.len())]);
         hashes.push(b.hash);
+    }
+    if hashes.iter().any(|h| cfg.deny.contains(h)) {
+        return Ok(()); // reached a test-book start position
     }
     if game_over(&b, &hashes).is_some() {
         return Ok(());
@@ -234,6 +289,9 @@ pub fn run(cfg: Config) {
         cfg.soft_nodes,
         cfg.out.display()
     );
+    if !cfg.openings.is_empty() {
+        println!("openings: {} real lines, used for {}% of games", cfg.openings.len(), cfg.opening_percent);
+    }
 
     let mut handles = Vec::new();
     for t in 0..cfg.threads {

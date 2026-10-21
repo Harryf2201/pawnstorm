@@ -8,7 +8,8 @@
 
 use bullet_lib::{
     game::{
-        inputs::{Chess768, ChessBucketsMirrored, get_num_buckets},
+        formats::bulletformat::ChessBoard,
+        inputs::{Chess768, ChessBucketsMirrored, SparseInputType, get_num_buckets},
         outputs::MaterialCount,
     },
     nn::{
@@ -18,7 +19,7 @@ use bullet_lib::{
     trainer::{
         save::SavedFormat,
         schedule::{TrainingSchedule, TrainingSteps, lr, wdl},
-        settings::LocalSettings,
+        settings::{LocalSettings, TestDataset},
     },
     value::{ValueTrainerBuilder, loader},
 };
@@ -51,6 +52,110 @@ const KING_BUCKETS_4: [usize; 32] = [
     3, 3, 3, 3,
     3, 3, 3, 3,
 ];
+
+/// Threat inputs (trainer -Inputs mlthr): the usual 768 piece-square inputs, plus a second set of 768 that
+/// are active only for pieces attacked by the other side (same indexing, offset by 768). Attacks are
+/// computed exactly like the engine's Board::threats: pawns, knights, sliders blocked by any piece, king.
+/// Must match src/nnue.rs.
+#[derive(Clone, Copy, Debug, Default)]
+struct ThreatInputs;
+
+const FILE_A: u64 = 0x0101_0101_0101_0101;
+const FILE_H: u64 = FILE_A << 7;
+
+fn leaper(sq: usize, deltas: &[(i32, i32)]) -> u64 {
+    let (r, f) = ((sq / 8) as i32, (sq % 8) as i32);
+    deltas.iter().fold(0, |bb, &(dr, df)| {
+        let (nr, nf) = (r + dr, f + df);
+        if (0..8).contains(&nr) && (0..8).contains(&nf) { bb | 1 << (nr * 8 + nf) } else { bb }
+    })
+}
+
+fn slider(sq: usize, occ: u64, dirs: &[(i32, i32)]) -> u64 {
+    let (r, f) = ((sq / 8) as i32, (sq % 8) as i32);
+    let mut bb = 0;
+    for &(dr, df) in dirs {
+        let (mut nr, mut nf) = (r + dr, f + df);
+        while (0..8).contains(&nr) && (0..8).contains(&nf) {
+            let b = 1u64 << (nr * 8 + nf);
+            bb |= b;
+            if occ & b != 0 {
+                break;
+            }
+            nr += dr;
+            nf += df;
+        }
+    }
+    bb
+}
+
+const KNIGHT_D: [(i32, i32); 8] = [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)];
+const KING_D: [(i32, i32); 8] = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)];
+const BISHOP_D: [(i32, i32); 4] = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+const ROOK_D: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+
+/// Squares attacked by each side ([us, them]) in bulletformat's side-to-move-relative board (us = colour 0,
+/// moving "up" the board).
+fn attacks(pos: &ChessBoard) -> [u64; 2] {
+    let occ = pos.occ();
+    let mut att = [0u64; 2];
+    for (piece, square) in pos.into_iter() {
+        let side = usize::from(piece & 8 > 0);
+        let sq = usize::from(square);
+        let bit = 1u64 << sq;
+        att[side] |= match piece & 7 {
+            0 => {
+                if side == 0 {
+                    ((bit & !FILE_A) << 7) | ((bit & !FILE_H) << 9)
+                } else {
+                    ((bit & !FILE_A) >> 9) | ((bit & !FILE_H) >> 7)
+                }
+            }
+            1 => leaper(sq, &KNIGHT_D),
+            2 => slider(sq, occ, &BISHOP_D),
+            3 => slider(sq, occ, &ROOK_D),
+            4 => slider(sq, occ, &BISHOP_D) | slider(sq, occ, &ROOK_D),
+            _ => leaper(sq, &KING_D),
+        };
+    }
+    att
+}
+
+impl SparseInputType for ThreatInputs {
+    type RequiredDataType = ChessBoard;
+
+    fn num_inputs(&self) -> usize {
+        1536
+    }
+
+    fn max_active(&self) -> usize {
+        64
+    }
+
+    fn map_features<F: FnMut(usize, usize)>(&self, pos: &Self::RequiredDataType, mut f: F) {
+        let att = attacks(pos);
+        for (piece, square) in pos.into_iter() {
+            let c = usize::from(piece & 8 > 0);
+            let pc = 64 * usize::from(piece & 7);
+            let sq = usize::from(square);
+            let stm = [0, 384][c] + pc + sq;
+            let ntm = [384, 0][c] + pc + (sq ^ 56);
+            f(stm, ntm);
+            // Attacked by the other side.
+            if att[c ^ 1] & (1u64 << sq) != 0 {
+                f(768 + stm, 768 + ntm);
+            }
+        }
+    }
+
+    fn shorthand(&self) -> String {
+        "768+768t".to_string()
+    }
+
+    fn description(&self) -> String {
+        "Piece-square inputs plus attacked-piece inputs".to_string()
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -86,17 +191,25 @@ fn main() {
         lr_scheduler: lr::CosineDecayLR { initial_lr: 0.001, final_lr: 0.001 * 0.3f32.powi(5), final_superbatch: superbatches },
         save_rate: 10,
     };
-    let settings = LocalSettings { threads: 4, test_set: None, output_directory: &out, batch_queue_size: 64 };
+    // Held-out validation: any later argument "val=<bulletformat file>" reports validation loss during training.
+    let val = args.iter().skip(9).find_map(|a| a.strip_prefix("val=").map(str::to_string));
+    let settings = LocalSettings {
+        threads: 4,
+        test_set: val.as_deref().map(|p| TestDataset { path: p, freq: 512 }),
+        output_directory: &out,
+        batch_queue_size: 64,
+    };
     let data_loader = loader::DirectSequentialDataLoader::new(&[data.as_str()]);
     println!("Architecture           : ({inputs} -> {hidden})x2 -> {buckets}");
 
     // target = wdl * game_result + (1 - wdl) * sigmoid(score / SCALE)
-    if inputs == "ml" || inputs == "ml32" || inputs == "mlkb4" {
+    if inputs == "ml" || inputs == "ml32" || inputs == "mlkb4" || inputs == "mlthr" {
         // ml32: 32 neurons in the first hidden layer instead of 16. mlkb4: 4 mirrored king buckets on the inputs,
         // with a shared factoriser (merged into the bucket weights when saving), like kb4.
         let l1n: usize = if inputs == "ml32" { 32 } else { 16 };
         let kb = inputs == "mlkb4";
         let num_kb = if kb { get_num_buckets(&KING_BUCKETS_4) } else { 1 };
+        let in_rows = if inputs == "mlthr" { 1536 } else { 768 * num_kb };
         // Multi-layer: (768 -> hidden, clipped ReLU, pairwise products of the two halves) x2 -> 16 -> 32 -> 1,
         // each layer after the first picked by material (8 output buckets). The first layer is quantised
         // to i16 like the single-layer nets; the small layers stay f32 in their native (input-major) layout.
@@ -130,7 +243,7 @@ fn main() {
                     ])
                     .loss_fn(|output, target| output.sigmoid().squared_error(target))
                     .build(|builder, stm_inputs, ntm_inputs, output_buckets| {
-                        let mut l0 = builder.new_affine("l0", 768 * num_kb, hidden);
+                        let mut l0 = builder.new_affine("l0", in_rows, hidden);
                         if $factorised {
                             let l0f = builder.new_weights("l0f", Shape::new(hidden, 768), InitSettings::Zeroed);
                             l0.weights = l0.weights + l0f.repeat(num_kb);
@@ -166,6 +279,8 @@ fn main() {
         }
         if kb {
             ml_trainer!(ChessBucketsMirrored::new(KING_BUCKETS_4), true);
+        } else if inputs == "mlthr" {
+            ml_trainer!(ThreatInputs, false);
         } else {
             ml_trainer!(Chess768, false);
         }

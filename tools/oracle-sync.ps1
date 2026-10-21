@@ -4,8 +4,10 @@
 # testing\datagen\<Name>\status.txt totals every collected segment for the dashboard and training.
 # Usage: .\tools\oracle-sync.ps1            (loop every 10 minutes; run hidden in the background)
 #        .\tools\oracle-sync.ps1 -Once
-# -Name: the data folder; it changes with each data generation (oracle-gen2 = v0.8's network, oracle-gen3 = v1.3's, oracle-gen4 = v1.7m's, oracle-gen5 = v1.11's, oracle-gen6 = v1.14's).
-param([switch]$Once, [int]$IntervalSeconds = 600, [string]$Name = 'oracle-gen6')
+# -Name: the data folder; it changes with each data generation (oracle-gen2 = v0.8's network, oracle-gen3 = v1.3's, oracle-gen4 = v1.7m's, oracle-gen5 = v1.11's, oracle-gen6 = v1.14's, oracle-gen7 = 2.0's).
+# -From / -Before (segment time stamps, yyyyMMdd-HHmmss UTC): only collect segments from that time on / before it, so a
+# generation switch on the server never mixes data (segments carry no generation label).
+param([switch]$Once, [int]$IntervalSeconds = 600, [string]$Name = 'oracle-gen7', [string]$From = '', [string]$Before = '')
 
 . "$PSScriptRoot\paths.ps1"
 if (-not $OracleHost) { throw 'Set $OracleHost and $OracleKey in tools\engines.local.ps1' }
@@ -38,7 +40,7 @@ function Invoke-Remote([string]$exe, [string[]]$arguments, [int]$TimeoutSeconds 
 function Remote([string]$cmd) { (Invoke-Remote 'ssh' ($ssh + $OracleHost + $cmd)).Out }
 
 function Sync-Once {
-    $segs = @(Remote 'ls -1 ~/outbox 2>/dev/null' | Where-Object { $_ -match '^seg-\d{8}-\d{6}$' })
+    $segs = @(Remote 'ls -1 ~/outbox 2>/dev/null' | Where-Object { $_ -match '^seg-\d{8}-\d{6}$' -and (-not $From -or $_.Substring(4) -ge $From) -and (-not $Before -or $_.Substring(4) -lt $Before) })
     foreach ($s in $segs) {
         $tmp = "$dir\_dl_$s"
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

@@ -20,6 +20,8 @@ param(
     [string]$Book = '8moves_v3.pgn',
     [string]$Sprt = '0,3',
     [int]$Hash = 16,
+    # Fixed nodes per move instead of a clock (with -TC inf): compares evaluation quality without speed.
+    [int]$Nodes = 0,
     [switch]$Live,
     # Gauntlet only: the first N engines each play every other engine, but not each other.
     [int]$Seeds = 1,
@@ -38,6 +40,14 @@ foreach ($spec in $Engines) {
         $elo = $Matches[1]; $n = "SF-$elo"
         $fcArgs += '-engine', "cmd=$($Known.stockfish)", "name=$n", 'option.UCI_LimitStrength=true', "option.UCI_Elo=$elo"
         $anchors += "anchor=${n}:$elo"
+    } elseif ($spec -match '^rubi:(\d+)$') {
+        # RubiChess handicapped to a fixed speed (LimitNps): no known rating, the tournament fit rates it.
+        $n = "Rubi-$([int]$Matches[1] / 1000)knps"
+        $fcArgs += '-engine', "cmd=$($Known.rubichess)", "name=$n", "option.LimitNps=$($Matches[1])"
+    } elseif ($spec -match '^plenty:(\d+)$') {
+        # PlentyChess handicapped to a fixed number of nodes per move (its own clock still runs).
+        $n = "Plenty-$($Matches[1])n"
+        $fcArgs += '-engine', "cmd=$($Known.plentychess)", "name=$n", "nodes=$($Matches[1])"
     } elseif ($Known.ContainsKey($spec)) {
         $n = $spec
         $fcArgs += '-engine', "cmd=$($Known[$spec])", "name=$n"
@@ -81,7 +91,7 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 
 $bookPath = "$Root\books\$Book"
 $format = if ($Book -like '*.epd') { 'epd' } else { 'pgn' }
-$fcArgs += '-each', "tc=$TC", "option.Hash=$Hash"
+$fcArgs += '-each', $(if ($Nodes -gt 0) { "nodes=$Nodes" } else { "tc=$TC" }), "option.Hash=$Hash"
 $fcArgs += '-openings', "file=$bookPath", "format=$format", 'order=random'
 $fcArgs += '-rounds', $Rounds, '-games', 2, '-repeat', '-concurrency', $Concurrency, '-recover'
 # Print results (incl. SPRT LLR) every 10 games so the dashboard can follow along.

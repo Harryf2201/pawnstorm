@@ -14,7 +14,13 @@ param(
     [int]$PairsPerIteration = 8,
     [int]$Concurrency = 15,
     [int]$Iterations = 2000,
-    [double]$REnd = 0.002
+    [double]$REnd = 0.002,
+    # Options file (name=value lines): starting values for a new run; its untuned options go to both engines unchanged.
+    [string]$Fixed = '',
+    # Regex of option names not to tune (they keep their -Fixed value, or the engine default).
+    [string]$Exclude = '',
+    # Narrower tuning ranges, e.g. 'SprCorrLmr=32:192,SprNmpVerify=8:20' (keeps a tuned value off the engine's 0 = off).
+    [string]$Ranges = ''
 )
 . "$PSScriptRoot\paths.ps1"
 . "$PSScriptRoot\job-status.ps1"
@@ -30,6 +36,14 @@ $job = @{ Id = 'spsa'; Title = 'Search tuning (SPSA)' }
 $params = @("uci`nquit" | & $exe | Where-Object { $_ -match '^option name (\S+) type spin default (-?\d+) min (-?\d+) max (-?\d+)' } | ForEach-Object {
         [pscustomobject]@{ Name = $Matches[1]; Default = [int]$Matches[2]; Min = [int]$Matches[3]; Max = [int]$Matches[4] }
     } | Where-Object { $_.Name -notin 'Hash', 'Threads', 'Move' })
+if ($Exclude) { $params = @($params | Where-Object { $_.Name -notmatch $Exclude }) }
+foreach ($r in ($Ranges -split ',' | Where-Object { $_ })) {
+    $n, $lo, $hi = $r -split '[=:]'
+    $params | Where-Object { $_.Name -eq $n } | ForEach-Object { $_.Min = [int]$lo; $_.Max = [int]$hi }
+}
+$fixedVals = [ordered]@{}
+if ($Fixed) { Get-Content $Fixed | Where-Object { $_ -match '^(\w+)=(.+)$' -and $Matches[1] -ne 'EvalFile' } | ForEach-Object { $fixedVals[$Matches[1]] = $Matches[2] } }
+$fixedOpts = @($fixedVals.Keys | Where-Object { $_ -notin $params.Name } | ForEach-Object { "option.$_=$($fixedVals[$_])" })
 # For the dashboard: each parameter's default and range.
 $params | ConvertTo-Json | Set-Content "$dir\params.json" -Encoding ascii
 $stateFile = "$dir\state.json"
@@ -37,7 +51,7 @@ if (Test-Path $stateFile) {
     $state = Get-Content $stateFile -Raw | ConvertFrom-Json
 } else {
     $theta = [ordered]@{}
-    foreach ($p in $params) { $theta[$p.Name] = [double]$p.Default }
+    foreach ($p in $params) { $theta[$p.Name] = if ($fixedVals.Contains($p.Name)) { [double]$fixedVals[$p.Name] } else { [double]$p.Default } }
     $state = [pscustomobject]@{ k = 0; games = 0; started = [int][double]::Parse((Get-Date -UFormat %s)); theta = [pscustomobject]$theta }
 }
 $history = "$dir\history.csv"
@@ -65,13 +79,15 @@ while ($state.k -lt $N -and -not (Test-Path "$dir\STOP")) {
     # (One thread always stays free for the Lichess bot, which plays in real time.)
     $conc = if ($others.Count) { 3 } else { $Concurrency }
     $out = & $fastchess -engine "cmd=$exe" name=spsa-a @optsA -engine "cmd=$exe" name=spsa-b @optsB `
-        -each "tc=$TC" option.Hash=16 "option.EvalFile=$LabRoot\engines\$Net" `
+        -each "tc=$TC" option.Hash=16 @fixedOpts "option.EvalFile=$LabRoot\engines\$Net" `
         -openings "file=$LabRoot\books\8moves_v3.pgn" format=pgn order=random -srand ($state.started + $k) `
         -rounds $PairsPerIteration -games 2 -repeat -concurrency $conc 2>&1
     $res = $out | Select-String '^Games: (\d+), Wins: (\d+), Losses: (\d+), Draws: (\d+)' | Select-Object -Last 1
     if (-not $res) { Set-JobStatus @job -State failed -Detail 'fastchess gave no result (see testing\spsa\last-output.txt).'; $out | Set-Content "$dir\last-output.txt"; exit 1 }
     $g = $res.Matches[0].Groups
     $w = [int]$g[2].Value; $l = [int]$g[3].Value; $d = [int]$g[4].Value
+    # An incomplete batch (an engine crashed or timed out) must not advance the schedule.
+    if ($w + $l + $d -lt 2 * $PairsPerIteration) { $out | Set-Content "$dir\last-output.txt"; continue }
     foreach ($p in $params) {
         $cEnd = [math]::Max(0.5, ($p.Max - $p.Min) / 20)
         $aEnd = $REnd * $cEnd * $cEnd

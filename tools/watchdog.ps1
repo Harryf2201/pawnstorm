@@ -22,7 +22,8 @@ $Limits = @{
     gpu_temp     = @{ warn = 83; crit = 88; ok = 75 }
     gpu_mem_temp = @{ warn = 95; crit = 100; ok = 85 }
     ssd_temp     = @{ warn = 70; crit = 78; ok = 60 }
-    ram_free_gb  = @{ warn = 3; crit = 1.5; ok = 4; low = $true }
+    # RAM: pausing processes does not free their memory, so only a true emergency (0.5 GB) pauses everything.
+    ram_free_gb  = @{ warn = 3; crit = 0.5; ok = 4; low = $true }
     disk_free_gb = @{ warn = 25; crit = 10; ok = 30; low = $true }
 }
 $Labels = @{ cpu_temp = 'CPU temperature'; gpu_temp = 'GPU temperature'; gpu_mem_temp = 'GPU memory temperature'; ssd_temp = 'SSD temperature'; ram_free_gb = 'free RAM'; disk_free_gb = 'free disk space' }

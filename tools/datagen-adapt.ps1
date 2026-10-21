@@ -8,8 +8,12 @@ param(
     [int]$Idle = 14,
     [string]$Name = 'gen3-v13-5k',
     [string]$Exe = 'pawnstorm-datagen-gen3',
-    [int64]$Target = 1000000000
+    [int64]$Target = 1000000000,
+    # Extra datagen flags, e.g. the real-opening starts: --openings <file> --opening-percent 50 --deny <file>
+    [string[]]$Extra = @()
 )
+# (-File passes '-Extra a,b,c' as one string: split it.)
+$Extra = @($Extra | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 . "$PSScriptRoot\paths.ps1"
 $dir = "$LabRoot\datagen\$Name"
 $log = "$LabRoot\datagen\adapt.log"
@@ -18,7 +22,7 @@ function Log($m) { Add-Content $log "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $
 function Start-Datagen($threads) {
     Get-Process pawnstorm-datagen* -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep 2
-    $p = Start-Process "$LabRoot\engines\$Exe.exe" -ArgumentList 'datagen', $threads, $Target, 5000, $dir `
+    $p = Start-Process "$LabRoot\engines\$Exe.exe" -ArgumentList (@('datagen', $threads, $Target, 5000, $dir) + $Extra) `
         -RedirectStandardOutput "$dir\stdout.txt" -RedirectStandardError "$dir\stderr.txt" -WindowStyle Hidden -PassThru
     Start-Sleep 1
     $p.PriorityClass = 'BelowNormal'
@@ -30,7 +34,7 @@ $idleSince = $null
 while ($true) {
     Set-Content "$LabRoot\datagen\adapt.heartbeat" (Get-Date -Format o)
     # (PowerShell names are case-insensitive, so this must not be called $busy: it would overwrite $Busy.)
-    # GPU training also counts: its data loader plus 16 datagen threads pushed the CPU to 93°C.
+    # GPU training also counts: its data loader plus 16 datagen threads pushed the CPU to 93 C.
     $tournament = [bool](Get-Process fastchess, trainer -ErrorAction SilentlyContinue)
     $current = 0
     if (Test-Path "$dir\status.txt") { $current = [int](((Get-Content "$dir\status.txt" | Select-String '^threads=') -replace 'threads=', '')) }
@@ -45,3 +49,4 @@ while ($true) {
     }
     Start-Sleep 30
 }
+

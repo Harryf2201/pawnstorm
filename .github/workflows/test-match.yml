@@ -1,0 +1,107 @@
+# Engine test matches on GitHub-hosted runners (extra testing capacity alongside the PC).
+# Each engine is a "spec" stored as assets of the `testkit` release: <spec>.nnue (network), <spec>.options
+# (Name=Value UCI options, one per line) and <spec>.ref (git ref of the code to build). Every job builds both
+# engines and plays its share of game pairs with fastchess; tools\cloud-test.ps1 starts runs and combines the results.
+name: test-match
+
+on:
+  workflow_dispatch:
+    inputs:
+      dev:
+        description: "Spec of the engine under test"
+      base:
+        description: "Spec of the baseline engine"
+      tc:
+        description: "Time control (fastchess tc=...)"
+        default: "8+0.08"
+      rounds:
+        description: "Game pairs per job"
+        default: "300"
+      jobs:
+        description: "Parallel jobs"
+        default: "6"
+      label:
+        description: "Run label (shown in the run name)"
+        default: ""
+
+run-name: "test-match ${{ inputs.label }} (${{ inputs.dev }} vs ${{ inputs.base }})"
+
+# One test at a time; independent of the datagen concurrency group.
+concurrency:
+  group: test-match
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.s.outputs.shards }}
+    steps:
+      - id: s
+        run: |
+          n=$(( ${{ inputs.jobs }} ))
+          if [ "$n" -gt 12 ]; then n=12; fi
+          if [ "$n" -lt 1 ]; then n=1; fi
+          echo "shards=$(seq -s, 1 "$n" | sed 's/^/[/; s/$/]/')" >> "$GITHUB_OUTPUT"
+
+  play:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.plan.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Test kit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir kit
+          gh release download testkit --dir kit --pattern '8moves_v3.pgn' \
+            --pattern '${{ inputs.dev }}.*' --pattern '${{ inputs.base }}.*'
+          ls -l kit
+
+      - name: Build both engines
+        run: |
+          for s in '${{ inputs.dev }}' '${{ inputs.base }}'; do
+            ref=$(tr -d '\r\n' < "kit/$s.ref")
+            git worktree add "w-$s" "$ref"
+            (cd "w-$s" && cargo build --release -q -p pawnstorm)
+            cp "w-$s/target/release/pawnstorm" "eng-$s"
+          done
+
+      - name: fastchess
+        run: |
+          curl -sSL https://github.com/Disservin/fastchess/releases/download/v1.8.2-alpha/fastchess-linux-x86-64.tar | tar -x
+          find . -maxdepth 3 -name fastchess -type f -perm -u+x | head -1 | xargs -I{} cp {} ./fc
+
+      - name: Play
+        run: |
+          args=()
+          for s in '${{ inputs.dev }}' '${{ inputs.base }}'; do
+            a=(-engine "cmd=./eng-$s" "name=$s" "option.EvalFile=kit/$s.nnue")
+            while IFS='=' read -r k v; do
+              k=$(echo "$k" | tr -d '\r '); v=$(echo "$v" | tr -d '\r ')
+              [ -n "$k" ] && [ "$k" != "Threads" ] && a+=("option.$k=$v")
+            done < "kit/$s.options"
+            args+=("${a[@]}")
+          done
+          seed=$(( ${{ github.run_id }} % 100000 * 31 + ${{ matrix.shard }} * 7919 ))
+          ./fc "${args[@]}" -each "tc=${{ inputs.tc }}" option.Hash=16 option.Threads=1 \
+            -openings file=kit/8moves_v3.pgn format=pgn order=random -srand "$seed" \
+            -rounds ${{ inputs.rounds }} -games 2 -repeat -concurrency "$(nproc)" -recover \
+            -pgnout file=games.pgn > out.txt 2>&1 || true
+          tail -20 out.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: |
+            out.txt
+            games.pgn
+          retention-days: 7
