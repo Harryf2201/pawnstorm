@@ -61,7 +61,9 @@ own branches (listed in EXPERIMENTS.md and versions.ini).
   generated with 2.0. (Earlier rule: the first version clearly above 3200 on every measure; v1.16 missed that gate narrowly.)
 - Stop clearly losing tests early; only run long tests when results are close or promising. Verify
   surprising results before believing them.
-- The Lichess bot is the owner's public account: confirm before changing what it runs.
+- The Lichess bot is a shared project (owner, Oct 21): changes expected to raise its Elo (tested engine/net upgrades,
+  draw/time/matchmaking settings) need no prior OK. Apply them between games, keep a config backup and tell the owner
+  afterwards. Cosmetic or social changes, and anything that risks the account, still need a word first.
 - Record every experiment in EXPERIMENTS.md and versions.ini.
 
 ## Gotchas

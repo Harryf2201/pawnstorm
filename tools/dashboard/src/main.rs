@@ -1,4 +1,4 @@
-//! Pawnstorm Lab: a live dashboard for fastchess tournaments.
+//! Pyther Lab (formerly Pawnstorm Lab): a live dashboard for fastchess tournaments.
 //!
 //! Each run lives in `<root>/runs/<id>/` and contains:
 //!   meta.txt    key=value lines written by tools/match.ps1
@@ -1064,7 +1064,7 @@ fn bot_game_json(g: &BotGame) -> Option<String> {
         Some((false, v)) => (format!("{:+.2}", (v * sign) as f64 / 100.0), v * sign),
         None => ("…".into(), 0),
     };
-    let me = "Pawnstorm".to_string();
+    let me = "Pyther".to_string();
     let (white, black) = if g.we_white { (me.clone(), g.opp.clone()) } else { (g.opp.clone(), me.clone()) };
     let thinking = if g.best.is_empty() { me } else { g.opp.clone() };
     let last_json = last.map_or("null".into(), |m| format!("[{},{}]", js(&sq_name(m.from())), js(&sq_name(m.to()))));
@@ -2233,7 +2233,7 @@ fn main() {
     version_files.push(PathBuf::from("versions.ini"));
     let app = Arc::new(App { root, runs: Mutex::new(HashMap::new()), lab_child: Mutex::new(None), version_files, bot: Mutex::new(BotLog::default()), refreshed: Mutex::new(None) });
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("cannot bind port");
-    println!("Pawnstorm Lab running at http://localhost:{port}");
+    println!("Pyther Lab running at http://localhost:{port}");
     for stream in listener.incoming().flatten() {
         let app = app.clone();
         std::thread::spawn(move || serve(&app, stream));

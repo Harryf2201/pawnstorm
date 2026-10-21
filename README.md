@@ -1,11 +1,11 @@
-# Pawnstorm
+# Pyther
 
-A UCI chess engine written in Rust.
+A UCI chess engine written in Rust (formerly called Pawnstorm; the crate, binaries and lab files still use that name).
 
 - Bitboard move generation with PEXT slider attacks (perft-verified)
 - Principal variation search with transposition table, null-move pruning, late move reductions,
   singular extensions, history/continuation-history move ordering and more
-- NNUE evaluation `(768 -> 512)x2 -> 1` trained with [bullet](https://github.com/jw1912/bullet)
+- NNUE evaluation `(768 -> 1024)x2 pairwise -> 16 -> 32 -> 1` with 8 output buckets, trained with [bullet](https://github.com/jw1912/bullet)
   on self-play data, with a hand-crafted fallback evaluation
 
 See [EXPERIMENTS.md](EXPERIMENTS.md) for everything tried so far and where each result lives.
