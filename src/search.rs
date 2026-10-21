@@ -633,6 +633,8 @@ impl Searcher {
         let mut prev_best = Move::NULL;
 
         for depth in 1..=max_depth {
+            // Sprint 10: node share of the best move in this iteration only (not accumulated over all iterations).
+            let iter_start = if p(P::SprTmIter) > 0 { Some((self.nodes, *self.root_nodes)) } else { None };
             let mut delta = p(P::AspDelta);
             let (mut alpha, mut beta) = if depth >= 4 { (score - delta, score + delta) } else { (-INF, INF) };
             // Sprint: after a fail-high, re-search slightly shallower (the score is already known to be good).
@@ -684,7 +686,11 @@ impl Searcher {
             prev_best = best_move;
             let mut soft = self.soft_ms;
             if self.clock_tm && depth >= 6 && self.nodes > 0 {
-                let frac = self.root_nodes[best_move.from()][best_move.to()] as f64 / self.nodes as f64;
+                let (f, t) = (best_move.from(), best_move.to());
+                let frac = match &iter_start {
+                    Some((n0, r0)) if self.nodes > *n0 => (self.root_nodes[f][t] - r0[f][t]) as f64 / (self.nodes - n0) as f64,
+                    _ => self.root_nodes[f][t] as f64 / self.nodes as f64,
+                };
                 let stab = [1.5, 1.25, 1.1, 1.0, 0.95, 0.9, 0.85][stable];
                 soft = ((soft as f64 * (1.5 - frac) * 1.35 * stab) as u64).min(self.hard_ms);
                 // Sprint 6: more time when the score has just dropped.
@@ -902,7 +908,9 @@ impl Searcher {
 
         if !pv_node && !in_check && excluded.is_null() {
             // Reverse futility pruning: we're so far above beta that a shallow search won't change it.
-            if depth <= p(P::RfpDepth) && eval - p(P::RfpMargin) * (depth - improving as i32) >= beta && eval < MATE_BOUND {
+            // (Sprint 10: a wider margin when the correction history moved the eval a lot, i.e. the eval is less certain.)
+            let rfp_extra = if p(P::SprRfpCorr) > 0 { (corr_mag * p(P::SprRfpCorr) / 64).min(100) } else { 0 };
+            if depth <= p(P::RfpDepth) && eval - p(P::RfpMargin) * (depth - improving as i32) - rfp_extra >= beta && eval < MATE_BOUND {
                 return eval;
             }
             // Razoring: hopelessly below alpha at low depth, just check captures.

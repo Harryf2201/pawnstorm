@@ -84,6 +84,9 @@ params! {
     SprQsCont = 0, 0, 1;
     SprQuietChk = 0, 0, 1;
     SprSeePin = 0, 0, 1;
+    // Search sprint 10 (Codex's ranked ideas 4-5): each 0 = off.
+    SprTmIter = 0, 0, 1;
+    SprRfpCorr = 0, 0, 128;
 }
 
 static mut GENERATION: u32 = 0;
