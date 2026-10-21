@@ -135,3 +135,14 @@ openings per pairing, so pairings get different, repeating openings; fastchess -
 | Quiet checks exempt from LMP/futility, confirmation and long TC (vs 2.0) | +2.1 +/- 3.8 (7200 g, 8+0.08); -1.3 +/- 5.3 (2400 g, 40+0.4) | Not kept (too small); candidate for a later combined test | sprint9 SprQuietChk |
 | 1024-wide multi-layer network on all gen5+gen6 (2.0 recipe), vs 2.0 | hold-out 0.010718 vs 0.010896; +2.5 +/- 4.2 (7200 g, 8+0.08); +4.3 +/- 5.9 and +6.4 +/- 5.7 (2x2400 g, 40+0.4); 23% slower on the PC, 16% on ARM; ARM node-identical | Better at longer time controls: candidate for the bot (v2.1) and the size for gen7 nets | net-g56all-1024, branch w1024 |
 | Gen7 real-opening starts: 100k human 2200+ Lichess lines (Sept 2026), 50% of games + 0-4 random plies, test-book start positions denied | Running on GitHub (next batch), Oracle (from 2026-10-21 07:39 UTC, oracle-gen7o), PC (gen7o-v20-5k) | Gen7 data from here on | openings/, tools/openings |
+| Sparse first hidden layer for the 1024 net (AVX2/NEON, transposed weights) | Bit-identical nodes but 8-10% slower; skipping L1 entirely did not change nps (so L1 is not the 1024 bottleneck; accumulator updates/memory are) | Dropped | (branch deleted) |
+| 1024 net training length (same data/recipe as v2.1, 240 sb) | Hold-out 160 sb 0.010806, 320 sb 0.010589, 480 sb 0.010555 vs 0.010718; 320 vs v2.1: -3.3 +/- 5.7 (3600 g, 8+0.08), +2.6 +/- 8.2 (1200 g, 40+0.4); 480 at 40+0.4 running | Lower hold-out did not show up in games; 240 stays the standard | net-g56all-1024-sb320/480 |
+| 4 mirrored king input buckets at 1024 (mlkb4, v2.1 recipe) | Hold-out 0.011345 vs 0.010718 | Dropped (second failure for king buckets) | net-g56all-1024-mlkb4 |
+| Sprint 11 (from the Lichess loss review, vs v2.1): losing captures that give check at the first qsearch ply (SprQsChkSac=1) / less LMR for quiet moves hitting the enemy king ring (SprKingAtk=1) / checks + captures next to the king (SprQsChkSac=2) | -3.7 +/- 5.5 / +1.7 +/- 5.4 (3600 g each, 8+0.08) / running | QsChkSac=1 dropped; KingAtk too small so far | branch sprint11 |
+
+Lichess loss review (Oct 21): the 15 losses since 2.0 were re-analysed with 2.1 at 1.5M nodes per position
+(testing\lichess\review: analyse.py, swings.py). About 7 of the 13 real losses were king attacks: sacrifices on g6/g7 and
+h-pawn storms that even the deeper search missed one move earlier. 2 losses were Lichess phantom time forfeits.
+Opening report over all 597 bot games (openings.py): as Black, 1.e4 e6 3.Nc3 Nf6 4.e5 scored 29% (50 games), 1...c5 60%,
+2.Nf3 e6 3.d4 37%, 2...d6 54%. This led to a small bot-only polyglot book (1...c5, 2...d6, a weighted mix of first moves
+as White, 7.Bg5 in the QGD exchange line).
