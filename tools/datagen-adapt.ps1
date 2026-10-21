@@ -12,6 +12,8 @@ param(
     # Extra datagen flags, e.g. the real-opening starts: --openings <file> --opening-percent 50 --deny <file>
     [string[]]$Extra = @()
 )
+# (-File passes '-Extra a,b,c' as one string: split it.)
+$Extra = @($Extra | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 . "$PSScriptRoot\paths.ps1"
 $dir = "$LabRoot\datagen\$Name"
 $log = "$LabRoot\datagen\adapt.log"
@@ -32,7 +34,7 @@ $idleSince = $null
 while ($true) {
     Set-Content "$LabRoot\datagen\adapt.heartbeat" (Get-Date -Format o)
     # (PowerShell names are case-insensitive, so this must not be called $busy: it would overwrite $Busy.)
-    # GPU training also counts: its data loader plus 16 datagen threads pushed the CPU to 93°C.
+    # GPU training also counts: its data loader plus 16 datagen threads pushed the CPU to 93 C.
     $tournament = [bool](Get-Process fastchess, trainer -ErrorAction SilentlyContinue)
     $current = 0
     if (Test-Path "$dir\status.txt") { $current = [int](((Get-Content "$dir\status.txt" | Select-String '^threads=') -replace 'threads=', '')) }
@@ -47,3 +49,4 @@ while ($true) {
     }
     Start-Sleep 30
 }
+
