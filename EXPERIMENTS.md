@@ -135,3 +135,42 @@ openings per pairing, so pairings get different, repeating openings; fastchess -
 | Quiet checks exempt from LMP/futility, confirmation and long TC (vs 2.0) | +2.1 +/- 3.8 (7200 g, 8+0.08); -1.3 +/- 5.3 (2400 g, 40+0.4) | Not kept (too small); candidate for a later combined test | sprint9 SprQuietChk |
 | 1024-wide multi-layer network on all gen5+gen6 (2.0 recipe), vs 2.0 | hold-out 0.010718 vs 0.010896; +2.5 +/- 4.2 (7200 g, 8+0.08); +4.3 +/- 5.9 and +6.4 +/- 5.7 (2x2400 g, 40+0.4); 23% slower on the PC, 16% on ARM; ARM node-identical | Better at longer time controls: candidate for the bot (v2.1) and the size for gen7 nets | net-g56all-1024, branch w1024 |
 | Gen7 real-opening starts: 100k human 2200+ Lichess lines (Sept 2026), 50% of games + 0-4 random plies, test-book start positions denied | Running on GitHub (next batch), Oracle (from 2026-10-21 07:39 UTC, oracle-gen7o), PC (gen7o-v20-5k) | Gen7 data from here on | openings/, tools/openings |
+
+## Oct 22: exact i8 feature-weight table (v2.1, branch i8w)
+
+Runtime-only 64-byte-aligned i8 rows plus CSR-style per-row (u16 index, i16 correction)
+exceptions, built in set_net. Serialized Network/file format unchanged. SprI8W=0 (default)
+uses the original i16 table; 1 uses fused AVX2 widening updates / matching NEON widening /
+scalar fallback, then wrapping scalar corrections. The original table remains resident for
+the switch, so this reduces the active feature-table footprint, not total process memory.
+
+On pawnstorm-2.1.nnue: 7,149 exceptions (0.9090%), 736/768 rows, maximum 39 per row.
+Payload sizes: i8 rows 786,432 bytes + exceptions 28,596 + offsets 3,076 = 818,104 bytes,
+versus 1,572,864 bytes for the original feature weights (48.0% smaller; excludes Vec headers).
+
+Validation: cargo build --release; i8wcheck reconstructed all 786,432 weights, checked
+635,537 legal child updates and refreshes from deterministic random games and special-move
+positions, plus deliberate i16 wraparound probes. Both native AVX2 and a separate generic
+x86-64 scalar build passed. cargo check --release --target aarch64-unknown-linux-gnu
+with target-cpu=generic passed (existing unused-key warning in tt.rs); ARM execution and
+performance remain unverified.
+
+Bench depth 10, same net, one process at a time, BelowNormal priority, alternating 0/1
+four times after correctness checks finished:
+| Round | SprI8W=0 nps | SprI8W=1 nps |
+|---|---:|---:|
+| 1 | 840078 | 846078 |
+| 2 | 834161 | 759301 |
+| 3 | 754464 | 722262 |
+| 4 | 816903 | 822576 |
+| Median | 825532 | 790938.5 |
+
+Every bench: 118,451 nodes, identical to the unmodified w1024 executable built before edits.
+Fixed-depth UCI, Threads=1, startpos moves e2e4 c7c5 g1f3, depth 15:
+unmodified baseline, mode 0, and mode 1 all 191,873 nodes, score -48 cp, bestmove d7d6.
+Default bench is very short (~0.15s), and the shared PC is noisy: median i8 was 4.2% slower,
+so there is no measured speed win and the switch stays off by default. An earlier timing
+pass overlapped correctness work and was discarded. No Elo test or ARM benchmark run.
+
+Reproduce: pawnstorm i8wcheck <net>; pawnstorm bench 10 <net> <0|1>.
+The existing UCI bench command also respects EvalFile and SprI8W.

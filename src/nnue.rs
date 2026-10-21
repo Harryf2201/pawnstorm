@@ -53,6 +53,71 @@ struct L1Quant {
 }
 static mut L1Q: Option<&'static L1Quant> = None;
 
+// Runtime-only compressed features; Network's on-disk layout is unchanged.
+#[repr(C, align(64))]
+struct I8Row([i8; HIDDEN]);
+#[repr(C)]
+struct Exception { index: u16, correction: i16 }
+struct FeatureI8 { rows: Vec<I8Row>, offsets: Vec<u32>, exceptions: Vec<Exception> }
+static mut FEATURE_I8: Option<&'static FeatureI8> = None;
+impl FeatureI8 {
+    fn build(net: &Network) -> Self {
+        let mut t = Self { rows: Vec::with_capacity(768), offsets: Vec::with_capacity(769), exceptions: Vec::new() };
+        for row in &net.feature_weights {
+            t.offsets.push(t.exceptions.len() as u32);
+            let mut bytes = I8Row([0; HIDDEN]);
+            for (i, &w) in row.vals.iter().enumerate() {
+                bytes.0[i] = w.clamp(-128, 127) as i8;
+                let correction = w.wrapping_sub(bytes.0[i] as i16);
+                if correction != 0 { t.exceptions.push(Exception { index: i as u16, correction }); }
+            }
+            t.rows.push(bytes);
+        }
+        t.offsets.push(t.exceptions.len() as u32);
+        t.exceptions.shrink_to_fit();
+        t
+    }
+    #[inline(always)]
+    fn fix(&self, dst: &mut [i16; HIDDEN], row: usize, sub: bool) {
+        for e in &self.exceptions[self.offsets[row] as usize..self.offsets[row + 1] as usize] {
+            let v = &mut dst[e.index as usize];
+            *v = if sub { v.wrapping_sub(e.correction) } else { v.wrapping_add(e.correction) };
+        }
+    }
+}
+#[inline(always)]
+fn i8_update<const NA: usize, const NS: usize>(src: &[i16; HIDDEN], dst: &mut [i16; HIDDEN], adds: &[usize], subs: &[usize]) {
+    let t = unsafe { FEATURE_I8.unwrap_unchecked() };
+    #[cfg(target_feature = "avx2")]
+    unsafe {
+        use std::arch::x86_64::*;
+        for i in (0..HIDDEN).step_by(16) {
+            let mut v = _mm256_load_si256(src.as_ptr().add(i).cast());
+            for &r in &adds[..NA] { v = _mm256_add_epi16(v, _mm256_cvtepi8_epi16(_mm_load_si128(t.rows[r].0.as_ptr().add(i).cast()))); }
+            for &r in &subs[..NS] { v = _mm256_sub_epi16(v, _mm256_cvtepi8_epi16(_mm_load_si128(t.rows[r].0.as_ptr().add(i).cast()))); }
+            _mm256_store_si256(dst.as_mut_ptr().add(i).cast(), v);
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        for i in (0..HIDDEN).step_by(8) {
+            let mut v = vld1q_s16(src.as_ptr().add(i));
+            for &r in &adds[..NA] { v = vaddq_s16(v, vmovl_s8(vld1_s8(t.rows[r].0.as_ptr().add(i)))); }
+            for &r in &subs[..NS] { v = vsubq_s16(v, vmovl_s8(vld1_s8(t.rows[r].0.as_ptr().add(i)))); }
+            vst1q_s16(dst.as_mut_ptr().add(i), v);
+        }
+    }
+    #[cfg(not(any(target_feature = "avx2", target_arch = "aarch64")))]
+    for i in 0..HIDDEN {
+        let mut v = src[i];
+        for &r in &adds[..NA] { v = v.wrapping_add(t.rows[r].0[i] as i16); }
+        for &r in &subs[..NS] { v = v.wrapping_sub(t.rows[r].0[i] as i16); }
+        dst[i] = v;
+    }
+    for &r in &adds[..NA] { t.fix(dst, r, false); }
+    for &r in &subs[..NS] { t.fix(dst, r, true); }
+}
 fn set_net(net: &'static Network) {
     let mut w = vec![0i8; OUTPUT_BUCKETS * L1 * HIDDEN];
     let mut mul = vec![0f32; OUTPUT_BUCKETS * L1];
@@ -69,6 +134,7 @@ fn set_net(net: &'static Network) {
         }
     }
     unsafe {
+        FEATURE_I8 = Some(Box::leak(Box::new(FeatureI8::build(net))));
         L1Q = Some(Box::leak(Box::new(L1Quant { w, mul })));
         NET = Some(net);
     }
@@ -145,9 +211,15 @@ pub fn refresh(b: &Board, acc: &mut AccPair) {
         for sq in 0..64 {
             let pc = b.mailbox[sq];
             if pc != NO_PIECE {
-                let w = &net.feature_weights[feature(persp, pc as usize, sq)].vals;
+                let row = feature(persp, pc as usize, sq);
+                if crate::params::p(crate::params::P::SprI8W) != 0 {
+                    let src = *a;
+                    i8_update::<1, 0>(&src.vals, &mut a.vals, &[row], &[]);
+                    continue;
+                }
+                let w = &net.feature_weights[row].vals;
                 for (v, d) in a.vals.iter_mut().zip(w) {
-                    *v += *d;
+                    *v = v.wrapping_add(*d);
                 }
             }
         }
@@ -183,6 +255,16 @@ pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
 
     let net = net();
     for persp in 0..2 {
+        if crate::params::p(crate::params::P::SprI8W) != 0 {
+            let a = adds.map(|(pc, sq)| feature(persp, pc, sq));
+            let s = subs.map(|(pc, sq)| feature(persp, pc, sq));
+            match (na, ns) {
+                (1, 1) => i8_update::<1, 1>(&parent[persp].vals, &mut child[persp].vals, &a, &s),
+                (1, 2) => i8_update::<1, 2>(&parent[persp].vals, &mut child[persp].vals, &a, &s),
+                _ => i8_update::<2, 2>(&parent[persp].vals, &mut child[persp].vals, &a, &s),
+            }
+            continue;
+        }
         let add: [&[i16; HIDDEN]; 2] = [
             &net.feature_weights[feature(persp, adds[0].0, adds[0].1)].vals,
             &net.feature_weights[feature(persp, adds[1].0, adds[1].1)].vals,
@@ -197,17 +279,17 @@ pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
         match (na, ns) {
             (1, 1) => {
                 for i in 0..HIDDEN {
-                    dst[i] = src[i] + add[0][i] - sub[0][i];
+                    dst[i] = src[i].wrapping_add(add[0][i]).wrapping_sub(sub[0][i]);
                 }
             }
             (1, 2) => {
                 for i in 0..HIDDEN {
-                    dst[i] = src[i] + add[0][i] - sub[0][i] - sub[1][i];
+                    dst[i] = src[i].wrapping_add(add[0][i]).wrapping_sub(sub[0][i]).wrapping_sub(sub[1][i]);
                 }
             }
             _ => {
                 for i in 0..HIDDEN {
-                    dst[i] = src[i] + add[0][i] + add[1][i] - sub[0][i] - sub[1][i];
+                    dst[i] = src[i].wrapping_add(add[0][i]).wrapping_add(add[1][i]).wrapping_sub(sub[0][i]).wrapping_sub(sub[1][i]);
                 }
             }
         }
@@ -425,4 +507,80 @@ pub fn evaluate_board(b: &Board) -> i32 {
     let mut acc = [Accumulator { vals: [0; HIDDEN] }; 2];
     refresh(b, &mut acc);
     evaluate(&acc, b.stm, b.occ().count_ones())
+}
+
+/// Deterministic differential check, including special-move positions and random games.
+pub fn i8wcheck() {
+    assert!(active(), "load a network with i8wcheck <path>");
+    let t = unsafe { FEATURE_I8.unwrap_unchecked() };
+    let counts: Vec<_> = t.offsets.windows(2).map(|x| x[1] - x[0]).collect();
+    println!("exceptions {} ({:.4}%), rows {}, max/row {}; i16 bytes {}, i8 bytes {}, exception bytes {}, offsets bytes {}, compressed total {}",
+        t.exceptions.len(), 100.0 * t.exceptions.len() as f64 / (768 * HIDDEN) as f64,
+        counts.iter().filter(|&&n| n != 0).count(), counts.iter().max().unwrap(),
+        768 * HIDDEN * 2, 768 * HIDDEN, t.exceptions.len() * 4, 769 * 4,
+        768 * HIDDEN + t.exceptions.len() * 4 + 769 * 4);
+    for r in 0..768 {
+        let mut reconstructed = [0i16; HIDDEN];
+        for i in 0..HIDDEN { reconstructed[i] = t.rows[r].0[i] as i16; }
+        t.fix(&mut reconstructed, r, false);
+        assert_eq!(reconstructed, net().feature_weights[r].vals);
+    }
+    for r in 0..768 {
+        let src = Accumulator { vals: [i16::MAX; HIDDEN] };
+        let mut dst = src;
+        i8_update::<1, 0>(&src.vals, &mut dst.vals, &[r], &[]);
+        for i in 0..HIDDEN { assert_eq!(dst.vals[i], src.vals[i].wrapping_add(net().feature_weights[r].vals[i])); }
+        let src = Accumulator { vals: [i16::MIN; HIDDEN] };
+        i8_update::<0, 1>(&src.vals, &mut dst.vals, &[], &[r]);
+        for i in 0..HIDDEN { assert_eq!(dst.vals[i], src.vals[i].wrapping_sub(net().feature_weights[r].vals[i])); }
+    }
+    let old = crate::params::p(crate::params::P::SprI8W);
+    let mut seed = 0x123456789abcdef1u64;
+    let mut random = || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+    let fens = [
+        crate::board::START_FEN,
+        "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+        "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+        "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1",
+    ];
+    let zero = [Accumulator { vals: [0; HIDDEN] }; 2];
+    let mut checked = 0;
+    for fen in fens {
+        for _ in 0..40 {
+            let mut b = Board::from_fen(fen).unwrap();
+
+            for _ in 0..120 {
+                let mut fresh = [zero; 2];
+                for mode in 0..2 {
+                    crate::params::set("SprI8W", mode);
+                    refresh(&b, &mut fresh[mode as usize]);
+                }
+                for p in 0..2 { assert_eq!(fresh[0][p].vals, fresh[1][p].vals); }
+                let acc = fresh[0];
+                let moves = b.legal_moves();
+                if moves.is_empty() { break; }
+                // Check every legal child, so rare special moves cannot be missed.
+                for &mv in &moves {
+                    let mut next = [zero; 2];
+                    for mode in 0..2 {
+                        crate::params::set("SprI8W", mode);
+                        update(&b, mv, &acc, &mut next[mode as usize]);
+                    }
+                    let mut child = b;
+                    child.make_move(mv);
+                    let mut full = zero;
+                    refresh(&child, &mut full);
+                    for p in 0..2 {
+                        assert_eq!(next[0][p].vals, next[1][p].vals, "update {mv}");
+                        assert_eq!(next[0][p].vals, full[p].vals, "refresh {mv}");
+                    }
+                    checked += 1;
+                }
+                b.make_move(moves[(random() % moves.len() as u64) as usize]);
+            }
+        }
+    }
+    crate::params::set("SprI8W", old);
+    println!("i8wcheck passed: {checked} updates, both perspectives; all 786432 weights reconstructed exactly");
 }

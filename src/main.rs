@@ -7,7 +7,14 @@ fn main() {
     match args.get(1).map(|s| s.as_str()) {
         Some("bench") => {
             let depth = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(bench::DEFAULT_DEPTH);
+            // bench [depth] [EvalFile] [SprI8W]; omitted arguments preserve defaults.
+            if let Some(path) = args.get(3) { nnue::load_file(path).expect("EvalFile"); }
+            if let Some(mode) = args.get(4) { pawnstorm::params::set("SprI8W", mode.parse().expect("SprI8W")); }
             bench::bench(depth);
+        }
+        Some("i8wcheck") => {
+            if let Some(path) = args.get(2) { nnue::load_file(path).expect("EvalFile"); }
+            nnue::i8wcheck();
         }
         Some("perft") => {
             if !bench::perft_suite() {
