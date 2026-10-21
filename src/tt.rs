@@ -73,6 +73,11 @@ impl TT {
             use core::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
             _mm_prefetch(&self.entries[self.index(key)] as *const Entry as *const i8, _MM_HINT_T0);
         }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            let ptr = &self.entries[self.index(key)] as *const Entry;
+            core::arch::asm!("prfm pldl1keep, [{0}]", in(reg) ptr, options(readonly, nostack, preserves_flags));
+        }
     }
 
     pub fn probe(&self, key: u64) -> Option<TTData> {

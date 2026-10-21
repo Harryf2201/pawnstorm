@@ -74,12 +74,27 @@ mod tt_eval_tests {
     #[test]
     fn correction_history_does_not_learn_halfmove_scaling() {
         let (b, mut s) = position();
-        assert_eq!(s.corrected(&b, 1000, 1), 600);
-        s.update_corr(&b, 1000, 600, 8, 1);
+        assert_eq!(s.corrected(&b, 1000, &s.corr_keys(&b, 1)), 600);
+        s.update_corr(&b, 1000, 600, 8, &s.corr_keys(&b, 1));
         assert_eq!(s.corr[b.stm][pawn_key(&b)], 0);
         assert_eq!(s.np_corr[b.stm][WHITE][non_pawn_key(&b, WHITE)], 0);
         assert_eq!(s.np_corr[b.stm][BLACK][non_pawn_key(&b, BLACK)], 0);
     }
+}
+
+#[derive(Clone, Copy)]
+struct HistoryRows {
+    // Row offsets for this node; the history entries themselves remain live across re-searches.
+    pawn: usize,
+    cont1: Option<usize>,
+    cont2: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct CorrKeys {
+    pawn: usize,
+    non_pawn: [usize; 2],
+    cont: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -326,14 +341,33 @@ impl Searcher {
         (c1 != NO_CONT && c2 != NO_CONT).then(|| (c2 * 768 + c1) % CORR_SIZE)
     }
 
+    #[inline(always)]
+    fn history_rows(&self, pawn: usize, ply: usize) -> HistoryRows {
+        let row = |c| if c == NO_CONT { None } else { Some(c * 768) };
+        HistoryRows {
+            pawn: (pawn % PAWN_HIST) * 768,
+            cont1: row(self.prev_cont(ply, 1)),
+            cont2: row(self.prev_cont(ply, 2)),
+        }
+    }
+
+    #[inline(always)]
+    fn corr_keys(&self, b: &Board, ply: usize) -> CorrKeys {
+        CorrKeys {
+            pawn: pawn_key(b),
+            non_pawn: [non_pawn_key(b, WHITE), non_pawn_key(b, BLACK)],
+            cont: self.cont_key(ply),
+        }
+    }
+
     /// The static eval adjusted by the correction histories (pawns, each side's other pieces, last moves),
     /// each weighted by a tunable parameter (256 = full weight).
     #[inline(always)]
-    fn corrected(&self, b: &Board, raw: i32, ply: usize) -> i32 {
+    fn corrected(&self, b: &Board, raw: i32, keys: &CorrKeys) -> i32 {
         let s = b.stm;
-        let mut c = self.corr[s][pawn_key(b)] * p(P::CorrPawnW)
-            + (self.np_corr[s][WHITE][non_pawn_key(b, WHITE)] + self.np_corr[s][BLACK][non_pawn_key(b, BLACK)]) * p(P::CorrNonPawnW);
-        if let Some(k) = self.cont_key(ply) {
+        let mut c = self.corr[s][keys.pawn] * p(P::CorrPawnW)
+            + (self.np_corr[s][WHITE][keys.non_pawn[WHITE]] + self.np_corr[s][BLACK][keys.non_pawn[BLACK]]) * p(P::CorrNonPawnW);
+        if let Some(k) = keys.cont {
             c += self.cont_corr[s][k] * p(P::CorrContW);
         }
         if p(P::CorrMinorW) > 0 {
@@ -346,15 +380,15 @@ impl Searcher {
     }
 
     /// Moves every correction for this position towards (search score - raw static eval).
-    fn update_corr(&mut self, b: &Board, raw: i32, score: i32, depth: i32, ply: usize) {
+    fn update_corr(&mut self, b: &Board, raw: i32, score: i32, depth: i32, keys: &CorrKeys) {
         let diff = (score - Self::fade_eval(b, raw)) * CORR_GRAIN;
         let w = (depth + 1).min(16);
         let upd = |e: &mut i32| *e = ((*e * (CORR_WEIGHT_SCALE - w) + diff * w) / CORR_WEIGHT_SCALE).clamp(-CORR_MAX, CORR_MAX);
         let s = b.stm;
-        upd(&mut self.corr[s][pawn_key(b)]);
-        upd(&mut self.np_corr[s][WHITE][non_pawn_key(b, WHITE)]);
-        upd(&mut self.np_corr[s][BLACK][non_pawn_key(b, BLACK)]);
-        if let Some(k) = self.cont_key(ply) {
+        upd(&mut self.corr[s][keys.pawn]);
+        upd(&mut self.np_corr[s][WHITE][keys.non_pawn[WHITE]]);
+        upd(&mut self.np_corr[s][BLACK][keys.non_pawn[BLACK]]);
+        if let Some(k) = keys.cont {
             upd(&mut self.cont_corr[s][k]);
         }
         if p(P::CorrMinorW) > 0 {
@@ -455,34 +489,30 @@ impl Searcher {
         }
     }
 
-    fn quiet_history(&self, b: &Board, mv: Move, ply: usize, threats: u64) -> i32 {
+    fn quiet_history(&self, b: &Board, mv: Move, rows: &HistoryRows, threats: u64) -> i32 {
         let idx = b.mailbox[mv.from()] as usize * 64 + mv.to();
         let (tf, tt) = ((threats >> mv.from()) as usize & 1, (threats >> mv.to()) as usize & 1);
         let mut s = self.butterfly[b.stm][tf][tt][mv.from()][mv.to()];
-        s += self.pawn_hist[(pawn_key(b) % PAWN_HIST) * 768 + idx];
-        let c1 = self.prev_cont(ply, 1);
-        if c1 != NO_CONT {
-            s += self.cont1[c1 * 768 + idx];
+        s += self.pawn_hist[rows.pawn + idx];
+        if let Some(c1) = rows.cont1 {
+            s += self.cont1[c1 + idx];
         }
-        let c2 = self.prev_cont(ply, 2);
-        if c2 != NO_CONT {
-            s += self.cont2[c2 * 768 + idx];
+        if let Some(c2) = rows.cont2 {
+            s += self.cont2[c2 + idx];
         }
         s
     }
 
-    fn update_quiet(&mut self, b: &Board, mv: Move, ply: usize, bonus: i32, threats: u64) {
+    fn update_quiet(&mut self, b: &Board, mv: Move, rows: &HistoryRows, bonus: i32, threats: u64) {
         let idx = b.mailbox[mv.from()] as usize * 64 + mv.to();
         let (tf, tt) = ((threats >> mv.from()) as usize & 1, (threats >> mv.to()) as usize & 1);
         gravity(&mut self.butterfly[b.stm][tf][tt][mv.from()][mv.to()], bonus);
-        gravity(&mut self.pawn_hist[(pawn_key(b) % PAWN_HIST) * 768 + idx], bonus);
-        let c1 = self.prev_cont(ply, 1);
-        if c1 != NO_CONT {
-            gravity(&mut self.cont1[c1 * 768 + idx], bonus);
+        gravity(&mut self.pawn_hist[rows.pawn + idx], bonus);
+        if let Some(c1) = rows.cont1 {
+            gravity(&mut self.cont1[c1 + idx], bonus);
         }
-        let c2 = self.prev_cont(ply, 2);
-        if c2 != NO_CONT {
-            gravity(&mut self.cont2[c2 * 768 + idx], bonus);
+        if let Some(c2) = rows.cont2 {
+            gravity(&mut self.cont2[c2 + idx], bonus);
         }
     }
 
@@ -499,7 +529,7 @@ impl Searcher {
         &mut self.capt_hist[b.mailbox[mv.from()] as usize][mv.to()][victim]
     }
 
-    fn score_moves(&self, b: &Board, list: &MoveList, scores: &mut [i32; 256], tt_move: Move, ply: usize, threats: u64) {
+    fn score_moves(&self, b: &Board, list: &MoveList, scores: &mut [i32; 256], tt_move: Move, ply: usize, threats: u64, rows: &HistoryRows, mut see: Option<&mut [Option<bool>; 256]>) {
         for i in 0..list.len {
             let mv = list.moves[i];
             scores[i] = if mv == tt_move {
@@ -517,7 +547,11 @@ impl Searcher {
                     } else {
                         0
                     };
-                    let base = if b.see(mv, 0) { 4_000_000 } else { -4_000_000 };
+                    let good = b.see(mv, 0);
+                    if let Some(cache) = see.as_mut() {
+                        cache[i] = Some(good);
+                    }
+                    let base = if good { 4_000_000 } else { -4_000_000 };
                     base + value * 16 + hist
                 }
             } else if mv == self.killers[ply][0] {
@@ -525,19 +559,22 @@ impl Searcher {
             } else if mv == self.killers[ply][1] {
                 2_000_000
             } else {
-                self.quiet_history(b, mv, ply, threats)
+                self.quiet_history(b, mv, rows, threats)
             };
         }
     }
 
     /// Selection sort step: brings the best remaining move to index i.
     #[inline(always)]
-    fn pick(list: &mut MoveList, scores: &mut [i32; 256], i: usize) -> Move {
+    fn pick(list: &mut MoveList, scores: &mut [i32; 256], i: usize, see: Option<&mut [Option<bool>; 256]>) -> Move {
         let mut best = i;
         for j in i + 1..list.len {
             if scores[j] > scores[best] {
                 best = j;
             }
+        }
+        if let Some(cache) = see {
+            cache.swap(i, best);
         }
         list.moves.swap(i, best);
         scores.swap(i, best);
@@ -742,7 +779,7 @@ impl Searcher {
                 {
                     let bonus = (p(P::HistBonusMul) * depth - 50).min(p(P::HistBonusMax));
                     let threats = b.threats(b.stm ^ 1);
-                    self.update_quiet(b, tt_move, ply, bonus, threats);
+                    self.update_quiet(b, tt_move, &self.history_rows(pawn_key(b), ply), bonus, threats);
                 }
                 return s;
             }
@@ -768,6 +805,7 @@ impl Searcher {
 
         // raw_eval: the network's evaluation (what the TT stores); static_eval: raw_eval adjusted
         // by the correction history (what pruning decisions use).
+        let keys = self.corr_keys(b, ply);
         let raw_eval;
         let static_eval;
         // Sprint 3: how far the correction histories moved the network's eval here (unreliable eval = large).
@@ -786,7 +824,7 @@ impl Searcher {
                 Some(e) if e.eval > -MATE_BOUND => e.eval,
                 _ => self.raw_eval(b, ply),
             };
-            static_eval = self.corrected(b, raw_eval, ply);
+            static_eval = self.corrected(b, raw_eval, &keys);
             corr_mag = (static_eval - Self::fade_eval(b, raw_eval)).abs();
             eval = static_eval;
             // A TT score is a better estimate than the static eval when its bound allows it.
@@ -820,6 +858,7 @@ impl Searcher {
             }
         }
         self.killers[ply + 1] = [Move::NULL; 2];
+        let rows = self.history_rows(keys.pawn, ply);
 
         if !pv_node && !in_check && excluded.is_null() {
             // Reverse futility pruning: we're so far above beta that a shallow search won't change it.
@@ -845,6 +884,7 @@ impl Searcher {
                 let r = p(P::NmpBase) + depth / p(P::NmpDepthDiv) + ((eval - beta) / p(P::NmpEvalDiv)).min(3);
                 let mut nb = *b;
                 nb.make_null();
+                self.tt.prefetch(nb.hash);
                 self.acc[ply + 1] = self.acc[ply];
                 self.stack[ply].cont = NO_CONT;
                 self.hashes.push(nb.hash);
@@ -884,9 +924,9 @@ impl Searcher {
                 let mut list = MoveList::new();
                 b.gen_moves(&mut list, true);
                 let mut scores = [0i32; 256];
-                self.score_moves(b, &list, &mut scores, tt_move, ply, 0);
+                self.score_moves(b, &list, &mut scores, tt_move, ply, 0, &rows, None);
                 for i in 0..list.len {
-                    let mv = Self::pick(&mut list, &mut scores, i);
+                    let mv = Self::pick(&mut list, &mut scores, i, None);
                     if !b.is_legal(mv) || !b.see(mv, pc_beta - static_eval) {
                         continue;
                     }
@@ -929,7 +969,7 @@ impl Searcher {
             list.moves.swap(0, k);
             scores[0] = 10_000_000;
         } else {
-            self.score_moves(b, &list, &mut scores, tt_move, ply, threats);
+            self.score_moves(b, &list, &mut scores, tt_move, ply, threats, &rows, None);
             scored = true;
         }
 
@@ -944,10 +984,10 @@ impl Searcher {
 
         for i in 0..list.len {
             if i == 1 && !scored {
-                self.score_moves(b, &list, &mut scores, tt_move, ply, threats);
+                self.score_moves(b, &list, &mut scores, tt_move, ply, threats, &rows, None);
                 scored = true;
             }
-            let mv = Self::pick(&mut list, &mut scores, i);
+            let mv = Self::pick(&mut list, &mut scores, i, None);
             if mv == excluded || !b.is_legal(mv) {
                 continue;
             }
@@ -1071,7 +1111,7 @@ impl Searcher {
                     // Sprint: a quiet move's re-search result feeds straight back into its history.
                     if is_quiet && p(P::SprLmrRes) > 0 && !self.stopped {
                         let bonus = (p(P::HistBonusMul) * new_depth - 50).min(p(P::HistBonusMax)) * p(P::SprLmrRes) / 64;
-                        self.update_quiet(b, mv, ply, if s > alpha { bonus } else { -bonus }, threats);
+                        self.update_quiet(b, mv, &rows, if s > alpha { bonus } else { -bonus }, threats);
                     }
                 }
                 if s > alpha && s < beta {
@@ -1107,9 +1147,9 @@ impl Searcher {
                                 self.killers[ply][1] = self.killers[ply][0];
                                 self.killers[ply][0] = mv;
                             }
-                            self.update_quiet(b, mv, ply, bonus, threats);
+                            self.update_quiet(b, mv, &rows, bonus, threats);
                             for &q in &quiets[..n_quiets] {
-                                self.update_quiet(b, q, ply, -bonus, threats);
+                                self.update_quiet(b, q, &rows, -bonus, threats);
                             }
                         } else if mv.is_capture() {
                             gravity(self.capt_entry(b, mv), bonus);
@@ -1158,7 +1198,7 @@ impl Searcher {
                 && !(bound == BOUND_LOWER && best <= static_eval)
                 && !(bound == BOUND_UPPER && best >= static_eval)
             {
-                self.update_corr(b, raw_eval, best, depth, ply);
+                self.update_corr(b, raw_eval, best, depth, &keys);
             }
             self.tt.store(b.hash, best_move, score_to_tt(best, ply), raw_eval, depth, bound, tt_pv);
         }
@@ -1194,6 +1234,7 @@ impl Searcher {
         }
         let tt_move = tt_entry.map_or(Move::NULL, |e| e.mv);
 
+        let keys = self.corr_keys(b, ply);
         let mut raw_eval = NO_EVAL;
         let mut best;
         if in_check {
@@ -1203,7 +1244,7 @@ impl Searcher {
                 Some(e) if e.eval > -MATE_BOUND => e.eval,
                 _ => self.raw_eval(b, ply),
             };
-            best = self.corrected(b, raw_eval, ply);
+            best = self.corrected(b, raw_eval, &keys);
             if best >= beta {
                 return best;
             }
@@ -1213,18 +1254,22 @@ impl Searcher {
         let mut list = MoveList::new();
         b.gen_moves(&mut list, !in_check);
         let mut scores = [0i32; 256];
-        self.score_moves(b, &list, &mut scores, tt_move, ply, if in_check { b.threats(b.stm ^ 1) } else { 0 });
+        let rows = self.history_rows(keys.pawn, ply);
+        // TT moves and underpromotions bypass SEE in scoring, so their entries stay unknown.
+        let mut see = [None; 256];
+        self.score_moves(b, &list, &mut scores, tt_move, ply, if in_check { b.threats(b.stm ^ 1) } else { 0 }, &rows, Some(&mut see));
 
         let mut best_move = Move::NULL;
         let mut legal = 0;
         let futility = if in_check { NO_EVAL } else { best + p(P::QsFutility) };
         for i in 0..list.len {
-            let mv = Self::pick(&mut list, &mut scores, i);
+            let mv = Self::pick(&mut list, &mut scores, i, Some(&mut see));
             if !b.is_legal(mv) {
                 continue;
             }
             if !in_check {
-                if !b.see(mv, 0) {
+                // Only the threshold-0 answer is cached; threshold 1 below must be evaluated separately.
+                if !see[i].unwrap_or_else(|| b.see(mv, 0)) {
                     continue;
                 }
                 if futility <= alpha && !b.see(mv, 1) {

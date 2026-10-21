@@ -135,3 +135,50 @@ openings per pairing, so pairings get different, repeating openings; fastchess -
 | Quiet checks exempt from LMP/futility, confirmation and long TC (vs 2.0) | +2.1 +/- 3.8 (7200 g, 8+0.08); -1.3 +/- 5.3 (2400 g, 40+0.4) | Not kept (too small); candidate for a later combined test | sprint9 SprQuietChk |
 | 1024-wide multi-layer network on all gen5+gen6 (2.0 recipe), vs 2.0 | hold-out 0.010718 vs 0.010896; +2.5 +/- 4.2 (7200 g, 8+0.08); +4.3 +/- 5.9 and +6.4 +/- 5.7 (2x2400 g, 40+0.4); 23% slower on the PC, 16% on ARM; ARM node-identical | Better at longer time controls: candidate for the bot (v2.1) and the size for gen7 nets | net-g56all-1024, branch w1024 |
 | Gen7 real-opening starts: 100k human 2200+ Lichess lines (Sept 2026), 50% of games + 0-4 random plies, test-book start positions denied | Running on GitHub (next batch), Oracle (from 2026-10-21 07:39 UTC, oracle-gen7o), PC (gen7o-v20-5k) | Gen7 data from here on | openings/, tools/openings |
+
+## Oct 22: speed1, exact speed changes for v2.1
+
+Baseline: `w1024` / `5f07bc6b35ae65183747648396253eb7e0680824`, built before editing.
+Candidate: uncommitted `speed1`, HIDDEN = 1024. Both built with `cargo build --release`, the same
+native CPU flags and `pawnstorm-2.1.nnue`. No version bump or bot change.
+
+- `src/tt.rs`, `TT::prefetch`: add AArch64 `prfm pldl1keep`; preserve x86 prefetch.
+- `src/search.rs`, `negamax`: prefetch the null child's TT entry immediately after `make_null`, before copying accumulators.
+- `history_rows`, `quiet_history`, `update_quiet`, `score_moves`: compute pawn and continuation row offsets once per node and pass them through. Cache offsets only, preserving live table reads, arithmetic and update order.
+- `corr_keys`, `corrected`, `update_corr`: reuse pawn, both non-pawn and continuation correction keys. Minor/major experimental keys are unchanged.
+- `score_moves`, `pick`, `qsearch`: carry explicit optional threshold-0 SEE results, swapping metadata with moves and scores. TT moves and underpromotions fall back to SEE because scoring did not evaluate them. Threshold-1 SEE remains separate. No requested item skipped.
+
+The bench CLI on this branch ignores a network argument, so validation used the requested UCI fallback:
+explicit EvalFile, Threads 1, Hash 16 MiB, fresh process and tables for each position, below-normal priority.
+All iterative-deepening nodes, scores, PVs, seldepth and hashfull matched, as did final bestmove.
+
+| Position | Depth | Baseline nodes | Candidate nodes |
+|---|---:|---:|---:|
+| Startpos | 13 | 53,100 | 53,100 |
+| Startpos moves e2e4 c7c5 g1f3 | 15 | 191,873 | 191,873 |
+| Kiwipete (FEN below) | 13 | 86,793 | 86,793 |
+| Rook endgame (FEN below) | 16 | 505,218 | 505,218 |
+| Promotion tactics (FEN below) | 14 | 150,136 | 150,136 |
+| Startpos moves e2e4 c7c5 g1f3, speed search | 24 | 4,687,399 | 4,687,399 |
+
+```text
+Kiwipete: r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1
+Rook endgame: 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1
+Promotion tactics: rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8
+```
+
+Speed: six consecutive baseline/candidate alternating pairs at depth 24 on the Sicilian position above,
+below-normal priority, unpinned, no concurrent validation or build jobs. Initial exploratory runs were excluded.
+Each search took about five seconds and returned the same nodes, score (-28 cp), bestmove and PV.
+
+| Build | NPS samples in run order | Median NPS | Range |
+|---|---|---:|---|
+| Baseline | 944468, 925631, 930224, 956612, 931703, 962109 | 938,085.5 | 925631-962109 |
+| Candidate | 932259, 935235, 980627, 963692, 909644, 954275 | 944,755 | 909644-980627 |
+
+Median change: **+0.71%**. Overlapping ranges and other PC work mean this is not strong evidence of a speed gain.
+No ARM runtime speed or node comparison was attempted; `cargo check --target aarch64-unknown-linux-gnu`
+passed with `RUSTFLAGS="-C target-cpu=generic"` to override this x86 PC's native CPU setting.
+`cargo test --release --lib` passed all four existing tests; `git diff --check` passed.
+Local binaries, verification script, per-position UCI logs and JSON measurements are retained under ignored
+`target/speed1/` in this worktree (reported speed samples are pairs 4-9).
