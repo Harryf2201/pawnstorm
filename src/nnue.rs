@@ -11,7 +11,7 @@ use crate::board::Board;
 use crate::types::*;
 
 /// Must match the trainer's hidden size and bucket count (trainer args 6 and 7).
-pub const HIDDEN: usize = 768;
+pub const HIDDEN: usize = 1024;
 pub const OUTPUT_BUCKETS: usize = 8;
 const L1: usize = 16;
 const L2: usize = 32;
