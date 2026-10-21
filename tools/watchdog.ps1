@@ -174,6 +174,7 @@ Log 'watchdog started'
 $level = 'ok'           # current enforced level: ok | warn | critical | manual
 $warnTicks = 0; $critTicks = 0; $okTicks = 0; $missingTicks = 0
 $pauseCount = 0
+$lastPause = Get-Date
 $reason = ''
 
 while ($true) {
@@ -239,12 +240,12 @@ while ($true) {
         if ($level -eq 'manual') { Resume-All; $level = 'ok'; $reason = '' }
         # Escalate: critical needs 2 readings (10s), warn needs 6 (30s), so brief spikes are ignored.
         if ($critTicks -ge 2 -and $level -ne 'critical') {
-            $level = 'critical'; $reason = $why -join ', '; $pauseCount++
+            $level = 'critical'; $reason = $why -join ', '; $pauseCount++; $lastPause = Get-Date
             $n = 0; foreach ($g in 'datagen', 'training', 'tournaments') { $n += Suspend-Group $g }
             Log "CRITICAL: paused everything ($n processes) - $reason"
             Notify 'Pawnstorm: everything paused' "Critical: $reason"
         } elseif ($warnTicks -ge 6 -and $level -eq 'ok') {
-            $level = 'warn'; $reason = $why -join ', '; $pauseCount++
+            $level = 'warn'; $reason = $why -join ', '; $pauseCount++; $lastPause = Get-Date
             $n = Suspend-Group 'datagen'
             Log "WARNING: paused data generation ($n processes) - $reason"
             Notify 'Pawnstorm: data generation paused' $reason
@@ -252,6 +253,8 @@ while ($true) {
         # Keep newly started processes paused too while a pause is in force.
         if ($level -eq 'critical') { foreach ($g in 'datagen', 'training', 'tournaments') { [void](Suspend-Group $g) } }
         elseif ($level -eq 'warn') { [void](Suspend-Group 'datagen') }
+        # Two quiet hours forget earlier pauses, so one hot spell doesn't make every later cool-down 20 minutes.
+        if ($level -eq 'ok' -and $pauseCount -gt 0 -and ((Get-Date) - $lastPause).TotalHours -ge 2) { $pauseCount = 0 }
         # Resume after a cool-down that grows if pauses keep recurring (60s, 120s, 240s, ... max 20 min).
         $needed = [math]::Min(240, 12 * [math]::Pow(2, [math]::Max(0, $pauseCount - 1)))
         if ($level -in 'warn', 'critical' -and $okTicks -ge $needed) {

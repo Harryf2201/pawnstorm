@@ -7,7 +7,7 @@
 # -Name: the data folder; it changes with each data generation (oracle-gen2 = v0.8's network, oracle-gen3 = v1.3's, oracle-gen4 = v1.7m's, oracle-gen5 = v1.11's, oracle-gen6 = v1.14's, oracle-gen7 = 2.0's).
 # -From / -Before (segment time stamps, yyyyMMdd-HHmmss UTC): only collect segments from that time on / before it, so a
 # generation switch on the server never mixes data (segments carry no generation label).
-param([switch]$Once, [int]$IntervalSeconds = 600, [string]$Name = 'oracle-gen7', [string]$From = '', [string]$Before = '')
+param([switch]$Once, [int]$IntervalSeconds = 600, [string]$Name = 'oracle-gen7o', [string]$From = '20261021-073906', [string]$Before = '')
 
 . "$PSScriptRoot\paths.ps1"
 if (-not $OracleHost) { throw 'Set $OracleHost and $OracleKey in tools\engines.local.ps1' }
@@ -75,7 +75,10 @@ function Sync-Once {
     $rate = if ($segUpdated -gt $segStart + 60) { [int64]($pending * 3600 / ($segUpdated - $segStart)) } else { 0 }
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     # positions = data already on this PC (what training uses); pending = in the server's current segment.
-    $lines = @('source=oracle', "state=$(if ($live.Count) { 'running' } else { 'stopped' })", "started=$first", "updated=$now",
+    # A -Before window that has closed is finished: nothing new can arrive (the live segment belongs to a later window).
+    $closed = $Before -and [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') -ge $Before
+    if ($closed) { $pending = 0; $rate = 0 }
+    $lines = @('source=oracle', "state=$(if ($closed) { 'finished' } elseif ($live.Count) { 'running' } else { 'stopped' })", "started=$first", "updated=$now",
         "threads=$threads", 'target=1000000000', 'soft_nodes=5000', "pending=$pending", "rate_h=$rate", "sync_every=$IntervalSeconds", "host=Oracle Cloud ARM ($threads cores)")
     foreach ($k in $sum.Keys) { $lines += "$k=$($sum[$k])" }
     [IO.File]::WriteAllLines("$dir\status.tmp", [string[]]$lines)

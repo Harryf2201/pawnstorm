@@ -360,7 +360,6 @@ function trackRate(g) {
 // Engine names -> friendly version names, from versions.ini (served by /api/versions).
 // "Pawnstorm-0.1", "pawnstorm-v0.1" and every other name listed for a version are the same engine.
 let catalog = [], aliasMap = {}, aliasRe = null, titleMap = {};
-let gate = null;
 const ekey = n => {
   const s = String(n).toLowerCase().replace(/[^a-z0-9.]/g, '');
   let o = '';
@@ -706,23 +705,8 @@ function renderGoals() {
   <div style="margin-top:10px"><span class="help" data-go="achievements">See all achievements →</span></div>`;
 }
 
-/// The 2.0 gate (coord/gate.json): each rule fixed in advance, the latest candidate's result and verdict.
-function renderGate() {
-  if (!gate || !gate.checks) return '';
-  const tone = { pass: 'pos', fail: 'neg', pending: 'warnc' };
-  const mark = { pass: '✓', fail: '✗', pending: '…' };
-  const rows = gate.checks.map(c => `<tr><td>${esc(c.name)}</td><td class="${tone[c.state] || ''}" style="font-variant-numeric:tabular-nums">${esc(c.value || '–')}</td><td class="sub">${esc(c.need)}</td><td class="${tone[c.state] || ''}" style="text-align:center">${mark[c.state] || ''}</td></tr>`).join('');
-  const v = gate.verdict;
-  return `<div class="panel" style="margin-bottom:14px">
-    <h2 style="margin-top:0">2.0 gate <span class="sub" style="text-transform:none;letter-spacing:0">· ${esc(gate.candidate)} · ${esc(gate.date)}</span>
-      <span class="${tone[v] || ''}" style="float:right;text-transform:none;letter-spacing:0">${v === 'pass' ? 'Passed' : v === 'fail' ? 'Not yet' : 'In progress'}</span></h2>
-    <div style="overflow-x:auto"><table><thead><tr><th>Rule</th><th>Result</th><th>Needed</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    ${gate.note ? `<div class="d" style="margin-top:8px">${esc(gate.note)}</div>` : ''}
-  </div>`;
-}
-
 function renderOverview(m) {
-  return renderHero(m) + renderGate() + renderExperiments(m) + renderNow() + renderLichess() + renderGoals();
+  return renderHero(m) + renderExperiments(m) + renderNow() + renderLichess() + renderGoals();
 }
 
 /// Experiments (versions with a letter, e.g. v1.2k): how each compares with the version it was
@@ -1369,7 +1353,7 @@ function renderData() {
   // A source still finishing an older generation (the cloud runs whole batches) switches over after it.
   function idleNote(s) {
     const older = gens.filter(g => srcOf(g) === s && genRunning(g) && g.state !== 'queued' && genOf(g) < newestGen)[0];
-    if (!older) return s === 'local' ? 'off: this PC is kept for testing' : 'idle or queued';
+    if (!older) return s !== 'local' ? 'idle or queued' : health && /datagen/.test(health.paused_groups || '') ? 'paused by the watchdog (temperature)' : 'off';
     const left = s === 'cloud' ? Math.max(0, (older.minutes || 330) * 60 + 300 - (older.now - older.started)) : 0;
     return `finishing a gen${genOf(older)} batch${left ? ' (about ' + dur(left) + ' left)' : ''}; then gen${newestGen}`;
   }
@@ -1786,10 +1770,9 @@ async function poll() {
   const j = async u => { try { return await (await fetch(u)).json(); } catch (e) { return undefined; } };
   const n = pollN++;
   try {
-    const [h, l, t, s, g, r, rt, a, cat, pr, sp, li, lv, gt] = await Promise.all([
+    const [h, l, t, s, g, r, rt, a, cat, pr, sp, li, lv] = await Promise.all([
       j('/api/health'), j('/api/lab'), j('/api/training'), j('/api/schedule'), j('/api/datagen'), j('/api/runs'),
       j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'), j('/api/prepare'), j('/api/spsa'), j('/api/lichess'), j('/api/lichess/live'),
-      n % 5 === 0 ? j('/api/gate') : Promise.resolve(undefined),
     ]);
     if (r === undefined) throw new Error('unreachable');
     health = h ?? null; lab = l ?? null; schedule = s ?? null;
@@ -1806,7 +1789,6 @@ async function poll() {
     lichess = li ?? null;
     lichessLive = lv ?? null;
     if (a) ach = a;
-    if (gt !== undefined) gate = gt;
     const champ = latestChampionship();
     const want = runs.filter(x => x.status === 'running' || isOpen('run:' + x.id) || x === champ).map(x => x.id);
     const got = await Promise.all(want.map(id => j('/api/run/' + encodeURIComponent(id))));

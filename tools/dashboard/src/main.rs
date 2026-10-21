@@ -2058,11 +2058,6 @@ impl App {
         if path == "/api/prepare" {
             return ("200 OK", self.prepare(), "application/json");
         }
-        if path == "/api/gate" {
-            // The 2.0 gate: rules and the latest candidate's results, kept in <lab>/coord/gate.json.
-            let s = std::fs::read_to_string(self.root.join("coord").join("gate.json")).unwrap_or_else(|_| "null".into());
-            return ("200 OK", s, "application/json");
-        }
         if path == "/api/versions" {
             return ("200 OK", self.versions_json(), "application/json");
         }

@@ -1,9 +1,0 @@
-# Counter-independent TT static evaluation
-
-Branch: `codex/tt-static-eval-20261016`, based on `f1cdec3`. This isolates one real bug from the older correctness bundle: the position hash omits the halfmove clock, but cached static evaluations included its fade. Reusing a position at a different clock could therefore reuse the wrong scaled evaluation.
-
-The change caches only the raw bounded evaluation, applies the current halfmove fade when reading it for static evaluation, and prevents correction history from learning the clock scaling as an evaluation error. Main and quiescence search use the same raw-cache convention. It does not fix TT search-bound dependence on the clock or include the older terminal-draw and continuation-context changes.
-
-Before the fix, all three targeted regressions failed: a cached raw 1000 at clock 80 returned 1000 rather than 600, a stored queen-advantage evaluation was 554 rather than raw 924, and correction-history scaling was wrong. After the fix, `cargo test --offline --lib --jobs 1 -- --test-threads=1` passed all four library tests, including the existing 10,000-plus-move NNUE update test. The release build also succeeded. These results were obtained during the approximately 03:00 session, before Claude acquired the resources; no tests were restarted during handoff.
-
-Bench before/after: not captured. This changes search semantics, so identical node counts are not an acceptance condition. Ready for focused code review; a one-thread bench signature and testing against the exact current master remain to be collected before merge. Suggested optional regression SPRT: `[0,5]`, 8+0.08, one match at a time, 16–32 MB hash and at most 14 concurrent games under Claude's scheduling; longer-control confirmation if it passes. No Elo improvement is claimed. Keep this correctness fix separate from search-strength experiments and the older combined correctness branch.
