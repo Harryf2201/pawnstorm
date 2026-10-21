@@ -43,6 +43,26 @@ params! {
     TtPvLmr = 1, 0, 2;
     DeeperMargin = 40, 10, 100;
     TmForcedDepth = 4, 0, 8;
+    // Search sprint 1 (Oct 19): each 0 = off.
+    SprFhDepth = 0, 0, 1;
+    SprCaptSeeDiv = 0, 0, 256;
+    SprCutNoTt = 0, 0, 2;
+    SprSeCutNeg = 0, 0, 2;
+    SprLmrRes = 0, 0, 128;
+    SprTtCaptLmr = 0, 0, 2;
+    // Search sprint 2: each 0 = off.
+    SprTtHist = 0, 0, 1;
+    SprQsEvas = 0, 0, 1;
+    SprAspFh = 0, 0, 1;
+    CorrMinorW = 0, 0, 384;
+    CorrMajorW = 0, 0, 384;
+    // Search sprint 3 (ideas from Codex's review): each 0 = off.
+    SprNmpVerify = 0, 0, 20;
+    SprCorrLmr = 0, 0, 512;
+    SprLazyScore = 0, 0, 1;
+    // Search sprint 4: each 0 = off.
+    SprHindsight = 0, 0, 1;
+    SprCaptFut = 0, 0, 400;
 }
 
 static mut GENERATION: u32 = 0;

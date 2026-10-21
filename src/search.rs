@@ -88,11 +88,13 @@ struct PlyInfo {
     /// piece * 64 + to of the move played at this ply (for continuation history), or NO_CONT.
     cont: usize,
     excluded: Move,
+    /// Reduction applied to the move searched from this ply (for hindsight depth adjustment at the child).
+    reduction: i32,
 }
 
 impl Default for PlyInfo {
     fn default() -> Self {
-        PlyInfo { static_eval: NO_EVAL, cont: NO_CONT, excluded: Move::NULL }
+        PlyInfo { static_eval: NO_EVAL, cont: NO_CONT, excluded: Move::NULL, reduction: 0 }
     }
 }
 
@@ -122,6 +124,9 @@ pub struct Searcher {
     corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// The same, keyed by each color's non-pawn pieces (index: side to move, piece color).
     np_corr: Box<[[[i32; CORR_SIZE]; 2]; 2]>,
+    /// Sprint 2: correction histories keyed by minor pieces (N, B, K) and major pieces (R, Q, K).
+    minor_corr: Box<[[i32; CORR_SIZE]; 2]>,
+    major_corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// The same, keyed by the last two moves (continuation correction).
     cont_corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// NNUE accumulators per ply.
@@ -140,6 +145,8 @@ pub struct Searcher {
     /// False for the extra Lazy-SMP threads: they search the same position to fill the shared
     /// hash table, while the main thread alone ages the table, manages time and picks the move.
     pub main_thread: bool,
+    /// Sprint 3: null-move pruning is off below this ply while a null-move verification search runs.
+    nmp_min_ply: usize,
     /// Set while pondering (thinking on the opponent's time): the clock is ignored until "ponderhit"
     /// clears it, and the time budget then counts from that moment.
     pub ponder: Arc<AtomicBool>,
@@ -164,6 +171,22 @@ fn non_pawn_key(b: &Board, c: usize) -> usize {
         x = x.wrapping_mul(0xff51afd7ed558ccd);
         x ^= x >> 33;
         h = (h ^ x).wrapping_mul(0xc4ceb9fe1a85ec53).rotate_left(23);
+    }
+    (h ^ (h >> 29)) as usize % CORR_SIZE
+}
+
+/// Hash of some piece types of both colors (type, color and square), for the minor/major correction histories.
+#[inline(always)]
+fn pieces_key(b: &Board, pts: &[usize]) -> usize {
+    let mut h = 0x9E3779B97F4A7C15u64;
+    for &pt in pts {
+        for c in 0..2 {
+            let mut x = (b.pieces[pt] & b.colors[c]) ^ ((pt * 2 + c) as u64 + 1).wrapping_mul(0x2545F4914F6CDD1D);
+            x ^= x >> 33;
+            x = x.wrapping_mul(0xff51afd7ed558ccd);
+            x ^= x >> 33;
+            h = (h ^ x).wrapping_mul(0xc4ceb9fe1a85ec53).rotate_left(23);
+        }
     }
     (h ^ (h >> 29)) as usize % CORR_SIZE
 }
@@ -251,6 +274,8 @@ impl Searcher {
             lmr_gen: generation(),
             corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             np_corr: vec![[[0i32; CORR_SIZE]; 2]; 2].into_boxed_slice().try_into().unwrap(),
+            minor_corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
+            major_corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             cont_corr: vec![[0i32; CORR_SIZE]; 2].into_boxed_slice().try_into().unwrap(),
             acc: vec![[Accumulator { vals: [0; nnue::HIDDEN] }; 2]; MAX_PLY + 8],
             root_nodes: Box::new([[0; 64]; 64]),
@@ -262,6 +287,7 @@ impl Searcher {
             stopped: false,
             print: true,
             main_thread: true,
+            nmp_min_ply: 0,
             overhead_ms: 10,
             ponder: Arc::new(AtomicBool::new(false)),
             pondering: false,
@@ -282,6 +308,9 @@ impl Searcher {
         for side in self.np_corr.iter_mut().flatten() {
             side.fill(0);
         }
+        for t in self.minor_corr.iter_mut().chain(self.major_corr.iter_mut()) {
+            t.fill(0);
+        }
     }
 
     /// Index into the continuation correction table for the position at `ply`, if it has two previous moves.
@@ -301,6 +330,12 @@ impl Searcher {
         if let Some(k) = self.cont_key(ply) {
             c += self.cont_corr[s][k] * p(P::CorrContW);
         }
+        if p(P::CorrMinorW) > 0 {
+            c += self.minor_corr[s][pieces_key(b, &[KNIGHT, BISHOP, KING])] * p(P::CorrMinorW);
+        }
+        if p(P::CorrMajorW) > 0 {
+            c += self.major_corr[s][pieces_key(b, &[ROOK, QUEEN, KING])] * p(P::CorrMajorW);
+        }
         (Self::fade_eval(b, raw) + c / (CORR_GRAIN * 256)).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
@@ -315,6 +350,12 @@ impl Searcher {
         upd(&mut self.np_corr[s][BLACK][non_pawn_key(b, BLACK)]);
         if let Some(k) = self.cont_key(ply) {
             upd(&mut self.cont_corr[s][k]);
+        }
+        if p(P::CorrMinorW) > 0 {
+            upd(&mut self.minor_corr[s][pieces_key(b, &[KNIGHT, BISHOP, KING])]);
+        }
+        if p(P::CorrMajorW) > 0 {
+            upd(&mut self.major_corr[s][pieces_key(b, &[ROOK, QUEEN, KING])]);
         }
     }
 
@@ -562,16 +603,20 @@ impl Searcher {
         for depth in 1..=max_depth {
             let mut delta = p(P::AspDelta);
             let (mut alpha, mut beta) = if depth >= 4 { (score - delta, score + delta) } else { (-INF, INF) };
+            // Sprint: after a fail-high, re-search slightly shallower (the score is already known to be good).
+            let mut fh = 0;
             loop {
-                let s = self.negamax(board, depth, alpha, beta, 0, false);
+                let s = self.negamax(board, (depth - fh).max(1), alpha, beta, 0, false);
                 if self.stopped {
                     break;
                 }
                 if s <= alpha {
                     beta = (alpha + beta) / 2;
                     alpha = (s - delta).max(-INF);
+                    fh = 0;
                 } else if s >= beta {
                     beta = (s + delta).min(INF);
+                    fh = (fh + p(P::SprAspFh)).min(3);
                 } else {
                     score = s;
                     break;
@@ -681,6 +726,14 @@ impl Searcher {
                     || (e.bound == BOUND_LOWER && s >= beta)
                     || (e.bound == BOUND_UPPER && s <= alpha))
             {
+                // Sprint: a quiet TT move that cuts off here earns its history bonus too.
+                if p(P::SprTtHist) > 0 && s >= beta && !tt_move.is_null() && tt_move.is_quiet()
+                    && b.mailbox[tt_move.from()] != NO_PIECE && b.mailbox[tt_move.from()] as usize / 6 == b.stm && b.mailbox[tt_move.to()] == NO_PIECE
+                {
+                    let bonus = (p(P::HistBonusMul) * depth - 50).min(p(P::HistBonusMax));
+                    let threats = b.threats(b.stm ^ 1);
+                    self.update_quiet(b, tt_move, ply, bonus, threats);
+                }
                 return s;
             }
         }
@@ -707,6 +760,8 @@ impl Searcher {
         // by the correction history (what pruning decisions use).
         let raw_eval;
         let static_eval;
+        // Sprint 3: how far the correction histories moved the network's eval here (unreliable eval = large).
+        let mut corr_mag = 0;
         let mut eval;
         if in_check {
             raw_eval = NO_EVAL;
@@ -722,6 +777,7 @@ impl Searcher {
                 _ => self.raw_eval(b, ply),
             };
             static_eval = self.corrected(b, raw_eval, ply);
+            corr_mag = (static_eval - Self::fade_eval(b, raw_eval)).abs();
             eval = static_eval;
             // A TT score is a better estimate than the static eval when its bound allows it.
             if let Some(e) = tt_entry {
@@ -740,6 +796,19 @@ impl Searcher {
             && ply >= 2
             && self.stack[ply - 2].static_eval != NO_EVAL
             && static_eval > self.stack[ply - 2].static_eval;
+        // Sprint: hindsight depth adjustment from the reduction of the move that led here and how the evals moved.
+        if p(P::SprHindsight) > 0 && !in_check && excluded.is_null() && ply >= 1 && self.stack[ply - 1].static_eval != NO_EVAL {
+            let prior_r = self.stack[ply - 1].reduction;
+            // Consumed here, so re-entries at this ply (null-move verification) do not adjust again.
+            self.stack[ply - 1].reduction = 0;
+            let both = static_eval + self.stack[ply - 1].static_eval;
+            if prior_r >= 3 && both <= 2 {
+                depth += 1;
+            }
+            if prior_r >= 1 && depth >= 2 && both > 175 {
+                depth -= 1;
+            }
+        }
         self.killers[ply + 1] = [Move::NULL; 2];
 
         if !pv_node && !in_check && excluded.is_null() {
@@ -761,6 +830,7 @@ impl Searcher {
                 && ply >= 1
                 && self.stack[ply - 1].cont != NO_CONT
                 && b.has_non_pawn_material(b.stm)
+                && ply >= self.nmp_min_ply
             {
                 let r = p(P::NmpBase) + depth / p(P::NmpDepthDiv) + ((eval - beta) / p(P::NmpEvalDiv)).min(3);
                 let mut nb = *b;
@@ -774,7 +844,24 @@ impl Searcher {
                     return 0;
                 }
                 if s >= beta {
-                    return if s >= MATE_BOUND { beta } else { s };
+                    // Sprint: at high depth, confirm the cutoff with a normal reduced search that may not
+                    // use null moves for a few plies (protects against zugzwang).
+                    let vd = p(P::SprNmpVerify);
+                    if vd > 0 && depth >= vd && self.nmp_min_ply == 0 {
+                        self.nmp_min_ply = ply + (3 * (depth - r) / 4).max(1) as usize;
+                        let v = self.negamax(b, depth - r, beta - 1, beta, ply, false);
+                        self.nmp_min_ply = 0;
+                        if self.stopped {
+                            return 0;
+                        }
+                        if v < beta {
+                            // Not confirmed: fall through to the normal search.
+                        } else {
+                            return if s >= MATE_BOUND { beta } else { s };
+                        }
+                    } else {
+                        return if s >= MATE_BOUND { beta } else { s };
+                    }
                 }
             }
             // ProbCut: a good capture that beats beta by a margin in a reduced search almost
@@ -824,7 +911,17 @@ impl Searcher {
         let mut list = MoveList::new();
         b.gen_moves(&mut list, false);
         let mut scores = [0i32; 256];
-        self.score_moves(b, &list, &mut scores, tt_move, ply, threats);
+        // Sprint: with a TT move in the list, search it first and score the other moves only if it does not cut
+        // off (most cut-nodes then skip scoring altogether).
+        let mut scored = false;
+        let tt_at = if p(P::SprLazyScore) > 0 && !tt_move.is_null() { list.moves[..list.len].iter().position(|&m| m == tt_move) } else { None };
+        if let Some(k) = tt_at {
+            list.moves.swap(0, k);
+            scores[0] = 10_000_000;
+        } else {
+            self.score_moves(b, &list, &mut scores, tt_move, ply, threats);
+            scored = true;
+        }
 
         let mut best = -INF;
         let mut best_move = Move::NULL;
@@ -836,6 +933,10 @@ impl Searcher {
         let mut skip_quiets = false;
 
         for i in 0..list.len {
+            if i == 1 && !scored {
+                self.score_moves(b, &list, &mut scores, tt_move, ply, threats);
+                scored = true;
+            }
             let mv = Self::pick(&mut list, &mut scores, i);
             if mv == excluded || !b.is_legal(mv) {
                 continue;
@@ -863,8 +964,23 @@ impl Searcher {
                     if depth <= 8 && !b.see(mv, -p(P::SeeQuiet) * depth) {
                         continue;
                     }
-                } else if depth <= 6 && !b.see(mv, -p(P::SeeNoisy) * depth * depth) {
-                    continue;
+                } else {
+                    // Sprint: capture futility: even winning the captured piece cannot reach alpha.
+                    if p(P::SprCaptFut) > 0 && !in_check && depth <= 6 && mv.is_capture() && !mv.is_promo()
+                        && static_eval + 100 + p(P::SprCaptFut) * depth + crate::board::SEE_VAL[Self::captured_type(b, mv)] <= alpha
+                        && { let mut nb = *b; nb.make_move(mv); !nb.in_check() }
+                    {
+                        continue;
+                    }
+                    // Sprint: captures with a good history get more leeway before SEE pruning.
+                    let ch = if p(P::SprCaptSeeDiv) > 0 && mv.is_capture() {
+                        self.capt_hist[b.mailbox[mv.from()] as usize][mv.to()][Self::captured_type(b, mv)] / p(P::SprCaptSeeDiv)
+                    } else {
+                        0
+                    };
+                    if depth <= 6 && !b.see(mv, (-p(P::SeeNoisy) * depth * depth - ch).min(0)) {
+                        continue;
+                    }
                 }
             }
 
@@ -887,6 +1003,9 @@ impl Searcher {
                         return s_beta; // multi-cut
                     } else if tt_score >= beta {
                         ext = -1;
+                    } else if cut_node && p(P::SprSeCutNeg) > 0 {
+                        // Sprint: not singular at an expected cut-node: search the TT move shallower.
+                        ext = -p(P::SprSeCutNeg);
                     }
                 }
             }
@@ -914,8 +1033,14 @@ impl Searcher {
                     // Positions that were once on a principal variation are searched less aggressively.
                     r -= (tt_pv && !pv_node) as i32 * p(P::TtPvLmr);
                     r += cut_node as i32;
+                    // Sprint: cut-nodes without a TT move, and quiets when the TT move is a capture.
+                    r += (cut_node && tt_move.is_null()) as i32 * p(P::SprCutNoTt);
+                    r += (is_quiet && !tt_move.is_null() && tt_move.is_capture()) as i32 * p(P::SprTtCaptLmr);
                     r += !improving as i32;
                     r -= nb.in_check() as i32;
+                    if is_quiet && p(P::SprCorrLmr) > 0 {
+                        r -= (corr_mag / p(P::SprCorrLmr)).min(2);
+                    }
                     if is_quiet {
                         if scores[i] >= 2_000_000 {
                             r -= 1; // killer
@@ -925,12 +1050,19 @@ impl Searcher {
                     }
                     r = r.clamp(0, (new_depth - 1).max(0));
                 }
+                self.stack[ply].reduction = r;
                 let mut s = -self.negamax(&nb, new_depth - r, -alpha - 1, -alpha, ply + 1, true);
+                self.stack[ply].reduction = 0;
                 if s > alpha && r > 0 {
                     // The reduced search beat alpha: re-search a little deeper if it did so by a lot,
                     // shallower if only just.
                     new_depth += (s > best + p(P::DeeperMargin) + 2 * new_depth) as i32 - (s < best + new_depth) as i32;
                     s = -self.negamax(&nb, new_depth, -alpha - 1, -alpha, ply + 1, !cut_node);
+                    // Sprint: a quiet move's re-search result feeds straight back into its history.
+                    if is_quiet && p(P::SprLmrRes) > 0 && !self.stopped {
+                        let bonus = (p(P::HistBonusMul) * new_depth - 50).min(p(P::HistBonusMax)) * p(P::SprLmrRes) / 64;
+                        self.update_quiet(b, mv, ply, if s > alpha { bonus } else { -bonus }, threats);
+                    }
                 }
                 if s > alpha && s < beta {
                     s = -self.negamax(&nb, new_depth, -beta, -alpha, ply + 1, false);
@@ -957,7 +1089,9 @@ impl Searcher {
                     }
                     self.pv_len[ply] = child_len;
                     if score >= beta {
-                        let bonus = (p(P::HistBonusMul) * depth - 50).min(p(P::HistBonusMax));
+                        // Sprint: a cutoff far above beta counts as if found one ply deeper.
+                        let hd = depth + (p(P::SprFhDepth) > 0 && score > beta + 150) as i32;
+                        let bonus = (p(P::HistBonusMul) * hd - 50).min(p(P::HistBonusMax));
                         if is_quiet {
                             if self.killers[ply][0] != mv {
                                 self.killers[ply][1] = self.killers[ply][0];
@@ -1087,6 +1221,9 @@ impl Searcher {
                     best = best.max(futility);
                     continue;
                 }
+            } else if p(P::SprQsEvas) > 0 && best > -MATE_BOUND && legal >= 2 && mv.is_quiet() {
+                // Sprint: in check, once two evasions have been searched and we are not mated, skip quiet evasions.
+                continue;
             }
             let mut nb = *b;
             nb.make_move(mv);
