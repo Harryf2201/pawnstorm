@@ -6,7 +6,7 @@ use crate::nnue::{self, AccPair, Accumulator};
 use crate::params::{generation, p, P};
 use crate::tt::*;
 use crate::types::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -145,6 +145,10 @@ pub struct Searcher {
     /// False for the extra Lazy-SMP threads: they search the same position to fill the shared
     /// hash table, while the main thread alone ages the table, manages time and picks the move.
     pub main_thread: bool,
+    /// This thread's node count, published every 2048 nodes so the main thread can report the total.
+    pub shared_nodes: Arc<AtomicU64>,
+    /// The helper threads' published counts (main thread only; for "info nodes/nps").
+    pub helper_nodes: Vec<Arc<AtomicU64>>,
     /// Sprint 3: null-move pruning is off below this ply while a null-move verification search runs.
     nmp_min_ply: usize,
     /// Set while pondering (thinking on the opponent's time): the clock is ignored until "ponderhit"
@@ -287,6 +291,8 @@ impl Searcher {
             stopped: false,
             print: true,
             main_thread: true,
+            shared_nodes: Arc::new(AtomicU64::new(0)),
+            helper_nodes: Vec::new(),
             nmp_min_ply: 0,
             overhead_ms: 10,
             ponder: Arc::new(AtomicBool::new(false)),
@@ -384,6 +390,7 @@ impl Searcher {
     }
 
     fn check_time(&mut self) {
+        self.shared_nodes.store(self.nodes, Ordering::Relaxed);
         if self.pondering && !self.ponder.load(Ordering::Relaxed) {
             self.pondering = false;
             self.start = Instant::now();
@@ -540,6 +547,7 @@ impl Searcher {
     pub fn search(&mut self, board: &Board, limits: &Limits) -> (Move, i32) {
         self.start = Instant::now();
         self.nodes = 0;
+        self.shared_nodes.store(0, Ordering::Relaxed);
         self.stopped = false;
         self.seldepth = 0;
         self.setup_time(limits, board.stm);
@@ -633,13 +641,15 @@ impl Searcher {
             if self.print {
                 let ms = self.elapsed_ms();
                 let pv: Vec<String> = self.pv[0][..self.pv_len[0]].iter().map(|m| m.to_uci()).collect();
+                // All threads (helpers' counts lag by up to 2048 nodes each).
+                let total = self.nodes + self.helper_nodes.iter().map(|n| n.load(Ordering::Relaxed)).sum::<u64>();
                 println!(
                     "info depth {} seldepth {} score {} nodes {} nps {} hashfull {} time {} pv {}",
                     depth,
                     self.seldepth,
                     format_score(score),
-                    self.nodes,
-                    self.nodes * 1000 / ms.max(1),
+                    total,
+                    total * 1000 / ms.max(1),
                     self.tt.hashfull(),
                     ms,
                     pv.join(" ")

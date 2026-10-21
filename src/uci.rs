@@ -150,6 +150,11 @@ impl Engine {
         searcher.overhead_ms = self.overhead_ms;
         let board = self.board;
         let mut helpers = std::mem::take(&mut self.helpers);
+        // Helpers publish their node counts so the main thread reports the total; reset them first.
+        searcher.helper_nodes = helpers.iter().map(|h| h.shared_nodes.clone()).collect();
+        for h in helpers.iter() {
+            h.shared_nodes.store(0, Ordering::Relaxed);
+        }
         for h in helpers.iter_mut() {
             h.hashes.clone_from(&self.hashes);
         }
