@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Pawnstorm Lab</title>
+<title>Pyther Lab</title>
 <style>
   :root {
     color-scheme: dark;
@@ -269,7 +269,7 @@
 </head>
 <body>
 <header>
-  <div class="brand">♞ Pawnstorm <span>Lab</span></div>
+  <div class="brand">♞ Pyther <span>Lab</span></div>
   <nav id="tabs"></nav>
   <div class="hright">
     <span id="updated"></span>
@@ -573,12 +573,12 @@ function eloChart(series, W) {
 const helpBlock = (key, label, text) => `<div style="margin-top:12px"><span class="help" data-toggle="${key}">ⓘ ${label} ${isOpen(key) ? '▾' : '▸'}</span>${isOpen(key) ? `<div class="helptext">${text}</div>` : ''}</div>`;
 
 const HELP_RATING = `<b>Rating</b> is an Elo-style strength score: +100 means winning about 64% of games against an equal-footing opponent a hundred points lower.
-  Pawnstorm is measured by playing <b>Stockfish locked to fixed strengths</b> (“SF-2900” is Stockfish limited to 2900) and its own earlier versions.
+  Pyther is measured by playing <b>Stockfish locked to fixed strengths</b> (“SF-2900” is Stockfish limited to 2900) and its own earlier versions.
   <b>±</b> is the 95% margin of error; it shrinks as more games are played. The scale is relative to these opponents, not an official rating.`;
 
 function renderHero(m) {
   const pts = m.major.length ? m.major : m.pts, cur = m.strongest;
-  if (!cur) return `<div class="panel"><div class="rating-label">Pawnstorm rating</div><div class="rating">–</div><div class="sub">Run a rating gauntlet to get the first estimate.</div></div>`;
+  if (!cur) return `<div class="panel"><div class="rating-label">Pyther rating</div><div class="rating">–</div><div class="sub">Run a rating gauntlet to get the first estimate.</div></div>`;
   const earlier = pts.slice(0, cur.index);
   const prev = earlier.length ? earlier.reduce((b, p) => p.perf > b.perf ? p : b) : null;
   const delta = prev ? cur.perf - prev.perf : null;
@@ -819,7 +819,7 @@ function renderVersions(m) {
     return h + '</div>';
   };
   return `<h2>Engine versions</h2>
-    <p class="lead">Each version of Pawnstorm, as described in versions.ini. Ratings are computed live from every game played; the bar shows the level on a shared scale (${lo}–${hi}) and the thin line is the margin of error.</p>
+    <p class="lead">Each version of Pyther, as described in versions.ini. Ratings are computed live from every game played; the bar shows the level on a shared scale (${lo}–${hi}) and the thin line is the margin of error.</p>
     <div class="toolbar"><span class="sub">Order</span>
       <button class="btn sm ${ui.sort !== 'rating' ? 'on' : ''}" data-set="sort:order">Version order</button>
       <button class="btn sm ${ui.sort === 'rating' ? 'on' : ''}" data-set="sort:rating">Strongest first</button></div>
@@ -982,7 +982,7 @@ function renderChampionship() {
       <div class="card wide"><div class="k">Games played</div><div class="v">${games.toLocaleString()} <span class="sub" style="font-size:.55em">/ ${total.toLocaleString()} · ${p.toFixed(1)}%</span></div>
         <div class="d">${left != null ? 'about ' + dur(left) + ' left' : running ? 'starting…' : 'finished'} · ${d.concurrency} games at a time</div><div class="bar big"><div style="width:${p}%"></div></div></div>
       <div class="card"><div class="k">Leader</div><div class="v" style="font-size:18px;margin-top:6px">${esc(champName(fit[0].name))}</div><div class="d">${fit[0].rating.toFixed(0)} rating in this event</div></div>
-      <div class="card"><div class="k">Best Pawnstorm</div>${(() => { const b = fit.find(f => isOurs(f.name)); return b ? `<div class="v" style="font-size:18px;margin-top:6px">${esc(champName(b.name))}</div><div class="d">${b.rating.toFixed(0)} ±${b.err.toFixed(0)}</div>` : '<div class="v">–</div>'; })()}</div>
+      <div class="card"><div class="k">Best Pyther</div>${(() => { const b = fit.find(f => isOurs(f.name)); return b ? `<div class="v" style="font-size:18px;margin-top:6px">${esc(champName(b.name))}</div><div class="d">${b.rating.toFixed(0)} ±${b.err.toFixed(0)}</div>` : '<div class="v">–</div>'; })()}</div>
     </div>
     <h4>Standings</h4>
     <p class="lead" style="margin:0 0 10px">${how} The bar shows each rating with its 95% range: where two ranges overlap, the order between them isn't settled yet. More games narrow them.</p>
@@ -1563,7 +1563,7 @@ const sfEvalText = () => sf.mate != null ? (sf.mate > 0 ? '+M' : '-M') + Math.ab
 const sfWhiteCp = () => sf.mate != null ? (sf.mate > 0 ? 3000 : -3000) : sf.cp || 0;
 
 /// The bot's games in progress (/api/lichess/live, one per game, rebuilt from its log): a board
-/// and Pawnstorm's eval for each; Stockfish 19 (in this browser) analyses the one picked.
+/// and Pyther's eval for each; Stockfish 19 (in this browser) analyses the one picked.
 function lichessLiveHtml(games) {
   const pct = cp => 50 + 50 * (2 / (1 + Math.exp(-cp / 250)) - 1);
   const gid = g => g.url.split('/')[3];
@@ -1581,9 +1581,9 @@ function lichessLiveHtml(games) {
       : `<div class="sfline">Stockfish 19 (${flavor}): <b>${sfEvalText()}</b> · depth ${sf.depth || '–'}${sf.pv.length ? ' · best line <b>' + esc(sf.pv.join(' ')) + '</b>' : ''}</div>`;
     return `<div class="game">
       ${player(g.black)}
-      <div class="bw">${bar(g.cp, '', "Pawnstorm's eval")}${boardHtml(g.fen, g.last)}${sfOn && sf.ready && isTarget ? bar(sfWhiteCp(), 'sf', 'Stockfish 19 eval') : ''}</div>
+      <div class="bw">${bar(g.cp, '', "Pyther's eval")}${boardHtml(g.fen, g.last)}${sfOn && sf.ready && isTarget ? bar(sfWhiteCp(), 'sf', 'Stockfish 19 eval') : ''}</div>
       ${player(g.white)}
-      <div class="ginfo"><span>Move <b>${g.move}</b></span><span>Pawnstorm <b>${esc(g.eval)}</b></span><span>Depth <b>${g.depth || '–'}</b></span></div>
+      <div class="ginfo"><span>Move <b>${g.move}</b></span><span>Pyther <b>${esc(g.eval)}</b></span><span>Depth <b>${g.depth || '–'}</b></span></div>
       <div class="sfline"><a href="${esc(g.url)}" target="_blank" rel="noopener">watch on Lichess</a></div>
       ${sfText}
     </div>`;
@@ -1591,7 +1591,7 @@ function lichessLiveHtml(games) {
   return `<h4>Playing now (${games.length})</h4>
     <div class="toolbar" style="flex-wrap:wrap;gap:6px"><span class="sub">Stockfish 19 in this browser:</span>${btn('off', 'Off')}${btn('lite', 'Lite (1.9 MB)')}${btn('full', 'Full (99 MB)')}</div>
     <div class="games">${games.map(card).join('')}</div>
-    <div class="sub" style="font-size:12px">Left bar: Pawnstorm's own eval from its last move. Right bar: Stockfish 19 analysing the current position in this browser, on this device's CPU (one game at a time). Both from White's side.</div>`;
+    <div class="sub" style="font-size:12px">Left bar: Pyther's own eval from its last move. Right bar: Stockfish 19 analysing the current position in this browser, on this device's CPU (one game at a time). Both from White's side.</div>`;
 }
 function renderLichess() {
   if (!lichess) return '';
@@ -1778,7 +1778,7 @@ function render() {
   if (!loaded) { setHtml($('#view'), '<div class="empty">Loading…</div>'); return; }
   const html = { overview: () => renderOverview(m), versions: () => renderVersions(m), championship: renderChampionship, tournaments: renderTournaments, achievements: () => renderAchievements(m), data: renderData, lab: renderLab }[tab]();
   setHtml($('#view'), html);
-  document.title = (m.strongest ? `${m.strongest.perf.toFixed(0)} · ` : '') + 'Pawnstorm Lab';
+  document.title = (m.strongest ? `${m.strongest.perf.toFixed(0)} · ` : '') + 'Pyther Lab';
 }
 
 let pollN = 0;

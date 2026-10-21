@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-pub const NAME: &str = "Pawnstorm";
+pub const NAME: &str = "Pyther";
 const SEARCH_STACK: usize = 64 * 1024 * 1024;
 
 struct Engine {
