@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       jobs:
-        description: "Parallel jobs (max 20; this account gets 6 at once)"
-        default: "6"
+        description: "Parallel jobs (max 20), or auto: 20 when no test match is running or queued, else 14 (6 runners stay free for a test). 6 also means auto (the old default, still passed by older chained runs)."
+        default: "auto"
       minutes:
         description: "Minutes of generation per job (keep under ~340: jobs are capped at 6 hours)"
         default: "330"
@@ -33,12 +33,24 @@ permissions:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
     steps:
       - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          n=$(( ${{ inputs.jobs }} ))
+          req="${{ inputs.jobs }}"
+          if [ "$req" = "auto" ] || [ "$req" = "6" ]; then
+            # The account runs 20 jobs at once; a test match needs 6 of them.
+            busy=$(gh run list --repo "${{ github.repository }}" --workflow test-match.yml --limit 30 --json status -q '[.[] | select(.status != "completed")] | length' || echo 1)
+            if [ "${busy:-1}" -gt 0 ]; then n=14; else n=20; fi
+            echo "auto: ${busy} test run(s) running or queued -> ${n} jobs"
+          else
+            n=$(( req ))
+          fi
           if [ "$n" -gt 20 ]; then n=20; fi
           if [ "$n" -lt 1 ]; then n=1; fi
           echo "shards=$(seq -s, 1 "$n" | sed 's/^/[/; s/$/]/')" >> "$GITHUB_OUTPUT"

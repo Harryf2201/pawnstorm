@@ -3,7 +3,7 @@
 # Usage: .\tools\cloud-datagen.ps1 [-Jobs 6] [-Minutes 330]
 # GitHub ran at most 6 jobs at once on this account, so the default batch is 6 (more would just queue).
 param(
-    [ValidateRange(1, 20)][int]$Jobs = 6,
+    [ValidateRange(0, 20)][int]$Jobs = 0,
     [ValidateRange(10, 340)][int]$Minutes = 330,
     [int]$SoftNodes = 5000,
     # Follow-up batches GitHub starts by itself after this one (e.g. -Chain 1 = two batches back to back).
@@ -29,7 +29,7 @@ try {
         return
     }
     $before = @(gh run list --workflow datagen.yml --limit 1 --json databaseId | ConvertFrom-Json).databaseId
-    gh workflow run datagen.yml -f jobs=$Jobs -f minutes=$Minutes -f soft_nodes=$SoftNodes -f chain=$Chain -f eval=$Eval
+    gh workflow run datagen.yml -f jobs=$(if ($Jobs) { $Jobs } else { 'auto' }) -f minutes=$Minutes -f soft_nodes=$SoftNodes -f chain=$Chain -f eval=$Eval
     if ($LASTEXITCODE -ne 0) { throw "GitHub refused to start the workflow (see the message above)." }
     # Wait for the new run to appear.
     $run = $null
