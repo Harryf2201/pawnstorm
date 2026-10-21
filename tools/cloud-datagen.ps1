@@ -1,6 +1,6 @@
 # Starts one batch of cloud data generation on GitHub Actions (see .github/workflows/datagen.yml).
 # Refuses to start if a batch is already running or queued, so only one batch is ever in flight.
-# Usage: .	oolsoud-datagen.ps1 [-Jobs 0] [-Minutes 330]
+# Usage: .\tools\cloud-datagen.ps1 [-Jobs 0] [-Minutes 330]
 # -Jobs 0 = auto: the workflow picks 20 when no test match is running or queued, else 14 (6 runners stay free for a test).
 param(
     [ValidateRange(0, 20)][int]$Jobs = 0,
