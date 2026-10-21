@@ -6,7 +6,7 @@ Setup on the server (as `ubuntu`):
 
     sudo apt-get install -y build-essential git
     curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-    git clone https://github.com/Harryf2201/pawnstorm.git ~/pawnstorm
+    git clone https://github.com/Harryf2201/pyther.git ~/pawnstorm
     cd ~/pawnstorm && cargo build --release --bin pawnstorm
     mkdir -p ~/work ~/outbox && cp tools/oracle/run-datagen.sh ~/ && chmod +x ~/run-datagen.sh
     sudo cp tools/oracle/pawnstorm-datagen.service /etc/systemd/system/
