@@ -150,3 +150,5 @@ as White, 7.Bg5 in the QGD exchange line).
 | First gen7 network (v2.1 recipe on g56all + 236M gen7 = 1.48B, 16% gen7) vs v2.1 | Hold-out 0.010568 vs 0.010718; +9.5 +/- 6.0 (3600 g, 8+0.08), +9.6 +/- 8.0 (1200 g, 40+0.4) | Kept: v2.2, on the Lichess bot from Oct 22 03:21 | net-g567-1024 |
 | 480 vs 240 superbatches (1024, g56all) at 8+0.08 | +6.4 +/- 5.9 (3600 g); at 40+0.4 +8.7 and -1.2 (2 x 1200 g) | Longer training probably helps a little: use it on the gen7 nets | net-g56all-1024-sb480 |
 | Exact speed-ups (Codex): aarch64 TT prefetch, null-child prefetch, node-local history keys, SEE reuse | Node-identical on PC and ARM; ARM +6-7% nps, PC +0.7% | Kept: merged into w1024, on the bot from Oct 22 00:29 | branch speed1 |
+| Second gen7 net (25% gen7, 240 sb) vs v2.2 | Hold-out 0.010516; +0.9 +/- 5.6 (3600 g, 8+0.08), -8.4 +/- 8.2 (1200 g, 40+0.4) | Dropped: more gen7 alone didn't help yet | net-g567b-1024 |
+| Same gen7 mix at 480 sb vs v2.2 | Hold-out 0.010540; +3.5 +/- 6.0 (3600 g, 8+0.08), +1.5 +/- 9.0 (1200 g, 40+0.4) | Not clearly better: v2.2 stays on the bot | net-g567b-480 |
