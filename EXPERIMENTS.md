@@ -147,3 +147,6 @@ Opening report over all 597 bot games (openings.py): as Black, 1.e4 e6 3.Nc3 Nf6
 2.Nf3 e6 3.d4 37%, 2...d6 54%. This led to a small bot-only polyglot book (1...c5, 2...d6, a weighted mix of first moves
 as White, 7.Bg5 in the QGD exchange line).
 | Exact i8 feature-weight table + per-row i16 correction lists (7,149 exceptions, 818 KB vs 1.5 MB; Codex) | Bit-exact (635k differential updates, identical nodes) on AVX2 and NEON; bench: PC 4.2% slower, ARM about 1% slower | Dropped: the cache saving does not pay for the sign-extension and fixups | branch i8w |
+| First gen7 network (v2.1 recipe on g56all + 236M gen7 = 1.48B, 16% gen7) vs v2.1 | Hold-out 0.010568 vs 0.010718; +9.5 +/- 6.0 (3600 g, 8+0.08), +9.6 +/- 8.0 (1200 g, 40+0.4) | Kept: v2.2, on the Lichess bot from Oct 22 03:21 | net-g567-1024 |
+| 480 vs 240 superbatches (1024, g56all) at 8+0.08 | +6.4 +/- 5.9 (3600 g); at 40+0.4 +8.7 and -1.2 (2 x 1200 g) | Longer training probably helps a little: use it on the gen7 nets | net-g56all-1024-sb480 |
+| Exact speed-ups (Codex): aarch64 TT prefetch, null-child prefetch, node-local history keys, SEE reuse | Node-identical on PC and ARM; ARM +6-7% nps, PC +0.7% | Kept: merged into w1024, on the bot from Oct 22 00:29 | branch speed1 |
