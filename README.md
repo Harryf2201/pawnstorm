@@ -25,6 +25,12 @@ cargo build --release
 self-play games and writes `<fen> | <score> | <result>` lines. The `datagen` GitHub Actions
 workflow runs the same generator on hosted runners.
 
+Targeted self-play starts: `--fens <one-FEN-per-line file> --fen-percent 100
+--deny <testbook-starts.fen>` selects a random seed plus 0–2 random legal plies.
+FEN starts take precedence over the existing opening mix; the percentage defaults
+to 50. See [tools/attack-seeds](tools/attack-seeds/README.md) for the streaming gen7
+king-attack seed extractor.
+
 ## Layout
 
 - `src/` engine

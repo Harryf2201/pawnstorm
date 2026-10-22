@@ -30,6 +30,9 @@ pub struct Config {
     /// from 8-9 random plies as before. Empty = random openings only.
     pub openings: Vec<Vec<Move>>,
     pub opening_percent: usize,
+    /// Targeted FEN starts, selected before the normal opening path.
+    pub fens: Vec<Board>,
+    pub fen_percent: usize,
     /// Hashes of the test book's start positions: a game whose opening reaches one is skipped.
     pub deny: std::collections::HashSet<u64>,
 }
@@ -45,6 +48,19 @@ pub fn load_deny(path: &str) -> std::collections::HashSet<u64> {
         .collect();
     assert!(!set.is_empty(), "deny file {path} is empty");
     set
+}
+
+/// Reads targeted starting positions (one FEN per line, '#' comments allowed).
+pub fn load_fens(path: &str) -> Vec<Board> {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read FEN file {path}: {e}"));
+    let boards: Vec<_> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| Board::from_fen(l).unwrap_or_else(|e| panic!("{path}: bad FEN {l}: {e}")))
+        .collect();
+    assert!(!boards.is_empty(), "FEN file {path} is empty");
+    boards
 }
 
 /// Reads an opening file (one line of UCI moves per entry, '#' comments allowed); every line must be legal.
@@ -125,7 +141,11 @@ fn play_game(searcher: &mut Searcher, tt: &TT, rng: &mut Rng, cfg: &Config, stat
     // plies, so games (and side to move) vary.
     let mut b = Board::startpos();
     let mut hashes = vec![b.hash];
-    let random_plies = if !cfg.openings.is_empty() && rng.below(100) < cfg.opening_percent {
+    let random_plies = if !cfg.fens.is_empty() && rng.below(100) < cfg.fen_percent {
+        b = cfg.fens[rng.below(cfg.fens.len())];
+        hashes = vec![b.hash];
+        rng.below(3)
+    } else if !cfg.openings.is_empty() && rng.below(100) < cfg.opening_percent {
         for &m in &cfg.openings[rng.below(cfg.openings.len())] {
             b.make_move(m);
             hashes.push(b.hash);
@@ -291,6 +311,9 @@ pub fn run(cfg: Config) {
     );
     if !cfg.openings.is_empty() {
         println!("openings: {} real lines, used for {}% of games", cfg.openings.len(), cfg.opening_percent);
+    }
+    if !cfg.fens.is_empty() {
+        println!("FEN starts: {} positions, used for {}% of games", cfg.fens.len(), cfg.fen_percent);
     }
 
     let mut handles = Vec::new();

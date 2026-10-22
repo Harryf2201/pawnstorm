@@ -1,5 +1,6 @@
 # Build output (any crate)
 target/
+.scratchpad/
 
 # Local, machine-specific files
 .claude/

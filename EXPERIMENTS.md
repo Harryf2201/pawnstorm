@@ -1,5 +1,31 @@
 # Pawnstorm experiments log
 
+## Oct 22: targeted king-attack self-play starts (branch targeted)
+
+Added `tools/attack-seeds` and datagen `--fens` / `--fen-percent`: own-engine
+self-play only, with 0-2 seeded random legal plies before the unchanged generator.
+Extractor scans local gen7/gen7o plus gen=7 cloud text/gzip files, gates on
+fullmoves 12-40, |score| <= 300 and sufficient material, samples every eighth
+qualifying record per inferred game region, excludes test-book starts, deduplicates
+the first four FEN fields, and reservoirs across all sources. Categories overlap.
+
+Run: 260 files, 596,413,278 records; 129,590,962 passed the base gates;
+32,360,713 matched attack features; 3,707,973 unique subsampled candidates;
+1,679,994 duplicate candidates; 0 deny hits. Output 200,000 unique FENs.
+Hit rates among base-eligible positions: opposite wings 9.27%, storm 0.99%,
+wedge 2.11%, exposed shield 18.76%, blocked front with heavy pieces 0.38%.
+Independent output check: 0 duplicates, 0 test-book overlaps, 0 fullmove violations.
+Seed file: `.scratchpad/attack-seeds.fen` in this worktree (the session sandbox
+denied the requested lab `testing/openings/attack-seeds.fen` destination).
+Live source files grew between scans; counts describe the completed final scan.
+
+Validation: release builds pass; extractor identity/color-symmetry tests pass.
+No-FEN fixed-seed regression: original and modified engines generated identical
+201-position files across 3 games (SHA-256 matches). A 30-second, one-thread,
+5000-soft-node FEN-start smoke run finished in 32 seconds: 31 games, 2,662
+positions, no errors; output is in `.scratchpad/attack-smoke`.
+No strength claim or new engine version; training/testing remains future work.
+
 Everything tried so far, what happened, and where the details live. Newest work is at the bottom of
 each section.
 

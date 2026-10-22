@@ -16,6 +16,7 @@ fn main() {
         }
         // datagen <threads> <positions> <soft-nodes> <output-dir> [max-seconds] [seed]
         //         [--openings <file> [--opening-percent 50] --deny <test-book start FENs>]
+        //         [--fens <file> [--fen-percent 50] --deny <test-book start FENs>]
         Some("datagen") => {
             // Positional arguments end at the first --flag.
             let npos = args.iter().position(|a| a.starts_with("--")).unwrap_or(args.len());
@@ -28,7 +29,9 @@ fn main() {
             let openings = flag("--openings").map(|p| datagen::load_openings(&p)).unwrap_or_default();
             let opening_percent = flag("--opening-percent").map(|s| s.parse::<usize>().ok().filter(|&p| p <= 100).expect("--opening-percent must be 0-100")).unwrap_or(50);
             let deny = flag("--deny").map(|p| datagen::load_deny(&p)).unwrap_or_default();
-            assert!(openings.is_empty() || !deny.is_empty(), "--openings needs --deny (the test book's start positions)");
+            let fens = flag("--fens").map(|p| datagen::load_fens(&p)).unwrap_or_default();
+            let fen_percent = flag("--fen-percent").map(|s| s.parse::<usize>().ok().filter(|&p| p <= 100).expect("--fen-percent must be 0-100")).unwrap_or(50);
+            assert!((openings.is_empty() && fens.is_empty()) || !deny.is_empty(), "--openings/--fens needs --deny (the test book's start positions)");
             datagen::run(datagen::Config {
                 threads: arg(2, 8) as usize,
                 positions: arg(3, 100_000_000),
@@ -38,6 +41,8 @@ fn main() {
                 seed: opt(7),
                 openings,
                 opening_percent,
+                fens,
+                fen_percent,
                 deny,
             });
         }
