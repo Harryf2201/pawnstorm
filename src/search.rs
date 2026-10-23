@@ -120,6 +120,8 @@ pub struct Searcher {
     seldepth: usize,
     /// Position hashes of the game so far plus the current search path (last = current position).
     pub hashes: Vec<u64>,
+    /// Hash count including the root; indices at or above this are strictly after the root.
+    root_hashes: usize,
     /// Quiet-move history by side, whether the from / to square is attacked by the opponent, from, to.
     butterfly: Box<[[[[[i32; 64]; 64]; 2]; 2]; 2]>,
     capt_hist: Box<[[[i32; 6]; 64]; 12]>,
@@ -280,6 +282,7 @@ impl Searcher {
             nodes: 0,
             seldepth: 0,
             hashes: Vec::with_capacity(1024),
+            root_hashes: 0,
             butterfly: Box::new([[[[[0; 64]; 64]; 2]; 2]; 2]),
             capt_hist: Box::new([[[0; 6]; 64]; 12]),
             cont1: vec![0; 768 * 768],
@@ -447,9 +450,13 @@ impl Searcher {
         let n = self.hashes.len();
         let limit = (b.halfmove as usize).min(n - 1);
         let mut i = 2;
+        let mut matches = 0;
         while i <= limit {
             if self.hashes[n - 1 - i] == b.hash {
-                return true;
+                matches += 1;
+                if n - 1 - i >= self.root_hashes || matches == 2 {
+                    return true;
+                }
             }
             i += 2;
         }
@@ -603,6 +610,7 @@ impl Searcher {
         if self.hashes.last() != Some(&board.hash) {
             self.hashes.push(board.hash);
         }
+        self.root_hashes = self.hashes.len();
         if nnue::active() {
             nnue::refresh(board, &mut self.acc[0]);
         }
@@ -1308,5 +1316,64 @@ impl Searcher {
         let bound = if best >= beta { BOUND_LOWER } else { BOUND_UPPER };
         self.tt.store(b.hash, best_move, score_to_tt(best, ply), raw_eval, 0, bound, pv_node || tt_entry.is_some_and(|e| e.pv));
         best
+    }
+}
+
+#[cfg(test)]
+mod repetition_tests {
+    use super::*;
+
+    fn searcher() -> Searcher {
+        let mut s = Searcher::new(Arc::new(TT::new(1)), Arc::new(AtomicBool::new(false)));
+        s.print = false;
+        s
+    }
+
+    #[test]
+    fn historical_twofold_does_not_draw_losing_root() {
+        crate::attacks::init();
+        let mut b = Board::from_fen("7k/8/8/8/8/8/8/1Q5K w - - 0 1").unwrap();
+        let mut s = searcher();
+        s.hashes.push(b.hash);
+        for mv in ["b1b2", "h8g8", "b2b1"] {
+            b.make_move(b.parse_move(mv).unwrap());
+            s.hashes.push(b.hash);
+        }
+        // Black can return to h8, but this would only be the second occurrence.
+        let (_, score) = s.search(&b, &Limits { depth: Some(4), ..Limits::default() });
+        assert!(score < -100, "historical twofold incorrectly scored {score}");
+        assert_eq!(s.root_hashes, 4);
+    }
+
+    #[test]
+    fn repetition_respects_root_boundary_and_halfmove_window() {
+        let mut b = Board::from_fen("7k/8/8/8/8/8/8/1Q5K w - - 8 1").unwrap();
+        let mut s = searcher();
+        s.hashes = vec![b.hash, 1, b.hash];
+        s.root_hashes = 3;
+        assert!(!s.is_repetition(&b)); // One match before the root.
+        s.root_hashes = 1;
+        assert!(!s.is_repetition(&b)); // A match at the root is not after it.
+        s.hashes = vec![1, 2, b.hash, 3, b.hash];
+        assert!(s.is_repetition(&b)); // A match strictly inside the search path.
+        s.root_hashes = 5;
+        s.hashes[0] = b.hash;
+        assert!(s.is_repetition(&b)); // Two historical matches: threefold.
+        b.halfmove = 2;
+        assert!(!s.is_repetition(&b)); // Oldest match is outside the window.
+        s.hashes = vec![1, b.hash, 2];
+        assert!(!s.is_repetition(&b)); // Opposite-side-to-move entries are skipped.
+    }
+
+    #[test]
+    fn helper_search_records_root_boundary() {
+        crate::attacks::init();
+        let b = Board::from_fen("7k/8/8/8/8/8/8/1Q5K w - - 0 1").unwrap();
+        let mut s = searcher();
+        s.main_thread = false;
+        s.hashes = vec![1, 2];
+        s.search(&b, &Limits { depth: Some(1), ..Limits::default() });
+        assert_eq!(s.root_hashes, 3);
+        assert_eq!(s.hashes.last(), Some(&b.hash));
     }
 }

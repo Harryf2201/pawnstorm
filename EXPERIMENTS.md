@@ -182,3 +182,17 @@ passed with `RUSTFLAGS="-C target-cpu=generic"` to override this x86 PC's native
 `cargo test --release --lib` passed all four existing tests; `git diff --check` passed.
 Local binaries, verification script, per-position UCI logs and JSON measurements are retained under ignored
 `target/speed1/` in this worktree (reported speed samples are pairs 4-9).
+
+## Oct 23: game-history repetition fix (rep3)
+
+Fixed `Searcher::is_repetition` on deployed-code base w1024: one earlier occurrence only draws
+when it is strictly after the search root; otherwise two prior occurrences are required.
+The root hash count is recorded by `search()` for main and Lazy SMP helper threads. The existing
+halfmove window and step-by-two scan are unchanged; no other search/pruning behavior was edited.
+
+Regression: queen-versus-king FEN `7k/8/8/8/8/8/8/1Q5K w - - 0 1`, followed by
+`b1b2 h8g8 b2b1`, searched to depth 4. Old detection gives Black a false 0 score by returning
+to h8; the fixed search remains losing. The test failed with the old detection restored and
+passes with the fix. Added boundary, threefold, halfmove-window, parity and helper setup checks.
+`cargo test`: all 7 tests passed. `cargo build --release`: passed. Embedded-network, single-thread
+`bench 10`, below-normal priority: 146,622 nodes before, 146,984 after. No Elo claim or version bump.
