@@ -5,7 +5,12 @@
 param(
     [ValidateRange(0, 20)][int]$Jobs = 0,
     [ValidateRange(10, 340)][int]$Minutes = 330,
-    [int]$SoftNodes = 5000,
+    [ValidateRange(1, 1000000000)][int]$SoftNodes = 5000,
+    [ValidateSet(768,1024)][int]$NnueWidth = 768,
+    [ValidateRange(0, 2000000000)][int]$HardNodes = 0,
+    [ValidateRange(1, 1000000)][int]$KeepEvery = 1,
+    [ValidateRange(0, 400)][int]$MaxPerGame = 0,
+    [ValidateRange(0, 1000000)][int]$DupCap = 0,
     # Follow-up batches GitHub starts by itself after this one (e.g. -Chain 1 = two batches back to back).
     [ValidateRange(0, 3)][int]$Chain = 0,
     # classical = gen1 data (hand-crafted eval); nnue = gen2 data from the network in nets\default.bin
@@ -29,7 +34,7 @@ try {
         return
     }
     $before = @(gh run list --workflow datagen.yml --limit 1 --json databaseId | ConvertFrom-Json).databaseId
-    gh workflow run datagen.yml -f jobs=$(if ($Jobs) { $Jobs } else { 'auto' }) -f minutes=$Minutes -f soft_nodes=$SoftNodes -f chain=$Chain -f eval=$Eval
+    gh workflow run datagen.yml -f jobs=$(if ($Jobs) { $Jobs } else { 'auto' }) -f minutes=$Minutes -f soft_nodes=$SoftNodes -f chain=$Chain -f eval=$Eval -f nnue_width=$NnueWidth -f hard_nodes=$HardNodes -f keep_every=$KeepEvery -f max_per_game=$MaxPerGame -f dup_cap=$DupCap
     if ($LASTEXITCODE -ne 0) { throw "GitHub refused to start the workflow (see the message above)." }
     # Wait for the new run to appear.
     $run = $null
@@ -41,7 +46,7 @@ try {
     if (-not $run) { throw "Started the workflow but couldn't find its run yet; check the Actions tab." }
     $dir = "$LabRoot\datagen\cloud-$($run.databaseId)"
     New-Item -ItemType Directory -Force $dir | Out-Null
-    [IO.File]::WriteAllLines("$dir\launch.txt", [string[]]@("jobs=$Jobs", "minutes=$Minutes", "soft_nodes=$SoftNodes", "eval=$Eval", "chain=$Chain"))
+    [IO.File]::WriteAllLines("$dir\launch.txt", [string[]]@("jobs=$Jobs", "minutes=$Minutes", "soft_nodes=$SoftNodes", "nnue_width=$NnueWidth", "hard_nodes=$HardNodes", "keep_every=$KeepEvery", "max_per_game=$MaxPerGame", "dup_cap=$DupCap", "eval=$Eval", "chain=$Chain"))
     "Started cloud batch: $Jobs jobs x $Minutes min$(if ($Chain) { ", then $Chain more batch(es) back to back" }) -> $($run.url)"
     "The dashboard shows it once tools\cloud-sync.ps1 is running (it downloads data as jobs finish)."
 } finally {

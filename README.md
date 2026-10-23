@@ -31,6 +31,15 @@ FEN starts take precedence over the existing opening mix; the percentage default
 to 50. See [tools/attack-seeds](tools/attack-seeds/README.md) for the streaming gen7
 king-attack seed extractor.
 
+Datagen quality controls: `--keep-every N` (default 1), `--max-per-game M`
+(default unlimited), `--dup-cap K` (default off), `--hard-nodes N` (default
+20 x soft nodes), and `--eval-file <net>`. Status records the recipe. `rescore
+<input.txt[.gz]|dir> <out.txt> --nodes N --threads T` relabels frozen text data
+while retaining game results; sampling, blending and checkpointed resume are supported.
+`tools/prepare-data.ps1 -Quota 0.75,0.20,0.05` assigns source shares with unbiased
+sampling. See [DATAGEN2.md](DATAGEN2.md) for the multi-day recipe and the important
+768/1024 build distinction in this checkout.
+
 ## Layout
 
 - `src/` engine

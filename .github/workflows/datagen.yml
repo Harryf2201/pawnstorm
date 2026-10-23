@@ -15,6 +15,21 @@ on:
       soft_nodes:
         description: "Soft node limit per move (local generator uses 5000)"
         default: "5000"
+      nnue_width:
+        description: "Compiled hidden width; must match nets/default.bin (768 or 1024)"
+        default: "768"
+      hard_nodes:
+        description: "Hard nodes per move (0 = 20 x soft_nodes)"
+        default: "0"
+      keep_every:
+        description: "Keep one in N eligible positions, random game phase"
+        default: "1"
+      max_per_game:
+        description: "Uniform per-game position cap (0 = unlimited)"
+        default: "0"
+      dup_cap:
+        description: "Per-thread conservative duplicate cap (0 = off)"
+        default: "0"
       chain:
         description: "Follow-up batches to start automatically after this one (only if every job succeeds)"
         default: "0"
@@ -72,22 +87,29 @@ jobs:
           # An empty network file makes the engine use its hand-crafted evaluation.
           if [ "${{ inputs.eval }}" != "nnue" ]; then : > nets/default.bin; fi
           ls -l nets/default.bin
-          cargo build --release -p pawnstorm
+          case "${{ inputs.nnue_width }}" in
+            768) features="" ;;
+            1024) features="--features nnue1024" ;;
+            *) echo "unsupported nnue_width"; exit 1 ;;
+          esac
+          cargo build --release -p pawnstorm $features
           ./target/release/pawnstorm perft
 
       - name: Generate
         run: |
-          out="data/shard-${{ matrix.shard }}"
+          out="data/shard-${{ matrix.shard }}-n${{ inputs.soft_nodes }}"
           mkdir -p "$out"
           # Distinct seed per job: run id and shard number mixed together.
           seed=$(( (${{ github.run_id }} * 1000 + ${{ matrix.shard }}) % 9007199254740991 ))
           echo "cores: $(nproc), seed: $seed"
-          ./target/release/pawnstorm datagen "$(nproc)" 1000000000000 ${{ inputs.soft_nodes }} "$out" $(( ${{ inputs.minutes }} * 60 )) "$seed" --openings openings/gen7-human.uci --opening-percent 50 --deny openings/testbook-starts.fen | tr '\r' '\n' | tail -n 3
+          hard="${{ inputs.hard_nodes }}"
+          if [ "$hard" = "0" ]; then hard=$(( ${{ inputs.soft_nodes }} * 20 )); fi
+          ./target/release/pawnstorm datagen "$(nproc)" 1000000000000 ${{ inputs.soft_nodes }} "$out" $(( ${{ inputs.minutes }} * 60 )) "$seed" --openings openings/gen7-human.uci --opening-percent 50 --deny openings/testbook-starts.fen --hard-nodes "$hard" --keep-every ${{ inputs.keep_every }} --max-per-game ${{ inputs.max_per_game }} --dup-cap ${{ inputs.dup_cap }} | tr '\r' '\n' | tail -n 3
           cat "$out/status.txt"
 
       - name: Compress
         run: |
-          cd "data/shard-${{ matrix.shard }}"
+          cd "data/shard-${{ matrix.shard }}-n${{ inputs.soft_nodes }}"
           for f in data_*.txt; do gzip -6 "$f"; done
           { echo "seed_run=${{ github.run_id }}"; echo "shard=${{ matrix.shard }}"; echo "cpu=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)"; } >> status.txt
           ls -la
@@ -95,7 +117,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: shard-${{ matrix.shard }}
-          path: data/shard-${{ matrix.shard }}/
+          path: data/shard-${{ matrix.shard }}-n${{ inputs.soft_nodes }}/
           compression-level: 0
           retention-days: 7
 
@@ -118,4 +140,4 @@ jobs:
           if [ "$remaining" -lt 0 ]; then remaining=0; fi
           echo "starting the next batch ($remaining more after it)"
           gh workflow run datagen.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" \
-            -f jobs=${{ inputs.jobs }} -f minutes=${{ inputs.minutes }} -f soft_nodes=${{ inputs.soft_nodes }} -f chain=$remaining -f eval=${{ inputs.eval }}
+            -f jobs=${{ inputs.jobs }} -f minutes=${{ inputs.minutes }} -f soft_nodes=${{ inputs.soft_nodes }} -f chain=$remaining -f eval=${{ inputs.eval }} -f nnue_width=${{ inputs.nnue_width }} -f hard_nodes=${{ inputs.hard_nodes }} -f keep_every=${{ inputs.keep_every }} -f max_per_game=${{ inputs.max_per_game }} -f dup_cap=${{ inputs.dup_cap }}

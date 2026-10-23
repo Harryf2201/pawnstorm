@@ -72,3 +72,12 @@ own branches (listed in EXPERIMENTS.md and versions.ini).
 - `tools\match.ps1` returning early (above) is the most common chaining bug.
 - Engine/data hot paths have separate x86 (AVX2) and ARM (NEON) code in `src\nnue.rs`: change both and
   check that search output (nodes at a fixed depth) is identical on both machines.
+
+## Data-quality runs (datagen2)
+
+See [DATAGEN2.md](DATAGEN2.md) for build/net preflight, normal/deep/targeted arms,
+rescore checkpoints and quota-based preparation. New datagen flags default off:
+`--keep-every 1 --max-per-game 0 --dup-cap 0`; hard nodes default to 20 x soft.
+The bounded duplicate cap is conservative and per thread (can saturate); prefer off
+for multi-day runs. This checkout defaults to HIDDEN=768; `--features nnue1024`
+is required for the supplied v2.2/v2.3 nets. Never silently use a mismatched net.

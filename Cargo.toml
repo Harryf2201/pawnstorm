@@ -3,6 +3,10 @@ name = "pawnstorm"
 version = "2.0.0"
 edition = "2021"
 
+[features]
+# Architecture selection; default preserves the targeted worktree baseline.
+nnue1024 = []
+
 [dependencies]
 shakmaty = "0.30.2"
 shakmaty-syzygy = "0.28.1"

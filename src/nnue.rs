@@ -11,14 +11,17 @@ use crate::board::Board;
 use crate::types::*;
 
 /// Must match the trainer's hidden size and bucket count (trainer args 6 and 7).
+#[cfg(not(feature = "nnue1024"))]
 pub const HIDDEN: usize = 768;
+#[cfg(feature = "nnue1024")]
+pub const HIDDEN: usize = 1024;
 pub const OUTPUT_BUCKETS: usize = 8;
 const L1: usize = 16;
 const L2: usize = 32;
 const SCALE: f32 = 400.0;
 const QA: i32 = 255;
 
-/// Size of bullet's quantised output (it may be padded to a multiple of 64).
+/// Unpadded quantised payload size; files must have canonical 64-byte padding.
 pub const NET_BYTES: usize = (768 * HIDDEN + HIDDEN) * 2
     + (HIDDEN * OUTPUT_BUCKETS * L1 + OUTPUT_BUCKETS * L1 + L1 * OUTPUT_BUCKETS * L2 + OUTPUT_BUCKETS * L2 + L2 * OUTPUT_BUCKETS + OUTPUT_BUCKETS) * 4;
 
@@ -75,8 +78,9 @@ fn set_net(net: &'static Network) {
 }
 
 fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
-    if bytes.len() < NET_BYTES {
-        return Err(format!("network file is {} bytes, expected at least {NET_BYTES}", bytes.len()));
+    const FILE_BYTES: usize = (NET_BYTES + 63) & !63;
+    if bytes.len() != FILE_BYTES {
+        return Err(format!("network file is {} bytes, expected exactly {FILE_BYTES} (64-byte padded) for HIDDEN={HIDDEN}, buckets={OUTPUT_BUCKETS}", bytes.len()));
     }
     unsafe {
         let layout = std::alloc::Layout::new::<Network>();
@@ -91,8 +95,11 @@ fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
 
 /// Loads the embedded network, if one was built in.
 pub fn init() {
-    if let Ok(net) = from_bytes(DEFAULT_NET) {
-        set_net(net);
+    if !DEFAULT_NET.is_empty() {
+        match from_bytes(DEFAULT_NET) {
+            Ok(net) => set_net(net),
+            Err(err) => println!("info string embedded {err}"),
+        }
     }
 }
 
@@ -381,7 +388,7 @@ mod tests {
             seed ^= seed << 17;
             seed
         };
-        let bytes: Vec<u8> = (0..NET_BYTES / 2).flat_map(|_| ((rand() % 101) as i16 - 50).to_le_bytes()).collect();
+        let bytes: Vec<u8> = (0..((NET_BYTES + 63) & !63) / 2).flat_map(|_| ((rand() % 101) as i16 - 50).to_le_bytes()).collect();
         set_net(from_bytes(&bytes).unwrap());
 
         let fens = [
@@ -425,4 +432,20 @@ pub fn evaluate_board(b: &Board) -> i32 {
     let mut acc = [Accumulator { vals: [0; HIDDEN] }; 2];
     refresh(b, &mut acc);
     evaluate(&acc, b.stm, b.occ().count_ones())
+}
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+    #[test]
+    fn exact_architecture_size() {
+        let size = (NET_BYTES + 63) & !63;
+        assert_eq!(size, std::mem::size_of::<Network>());
+        assert!(from_bytes(&vec![0; size - 1]).is_err());
+        assert!(from_bytes(&vec![0; size + 64]).is_err());
+        assert!(from_bytes(&vec![0; size]).is_ok());
+    }
+}
+pub fn embedded_empty() -> bool {
+    DEFAULT_NET.is_empty()
 }

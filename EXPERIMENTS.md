@@ -176,3 +176,45 @@ as White, 7.Bg5 in the QGD exchange line).
 | First gen7 network (v2.1 recipe on g56all + 236M gen7 = 1.48B, 16% gen7) vs v2.1 | Hold-out 0.010568 vs 0.010718; +9.5 +/- 6.0 (3600 g, 8+0.08), +9.6 +/- 8.0 (1200 g, 40+0.4) | Kept: v2.2, on the Lichess bot from Oct 22 03:21 | net-g567-1024 |
 | 480 vs 240 superbatches (1024, g56all) at 8+0.08 | +6.4 +/- 5.9 (3600 g); at 40+0.4 +8.7 and -1.2 (2 x 1200 g) | Longer training probably helps a little: use it on the gen7 nets | net-g56all-1024-sb480 |
 | Exact speed-ups (Codex): aarch64 TT prefetch, null-child prefetch, node-local history keys, SEE reuse | Node-identical on PC and ARM; ARM +6-7% nps, PC +0.7% | Kept: merged into w1024, on the bot from Oct 22 00:29 | branch speed1 |
+
+## 2026-10-23: datagen2 data-quality build (no engine promotion)
+
+Branch `datagen2`, based on `targeted` c2523b5. Added random-phase position thinning,
+uniform per-game caps, optional bounded conservative per-thread duplicate counters,
+explicit hard node budgets, and node/sampling recipe records. Added streaming parallel
+text/gzip rescoring with fresh TT/histories, original results, blending, deterministic
+sampling and crash-safe ordered checkpoints. Preparation now samples uniformly across
+whole sources with exact per-source allocations/optional quotas; both native and
+PowerShell paths honour SampleRate. Added strict architecture-sized padded net loading.
+Workflow/cloud launcher carry all recipe inputs, including 20k soft nodes and width.
+
+Important checkout discrepancy: targeted's source/embedded net are 768-wide, not the
+w1024 baseline described in the handoff. Default architecture was preserved; opt-in
+Cargo feature `nnue1024` supports the supplied v2.2/v2.3 files (both 2,118,208 bytes).
+Both load successfully with that feature. A default 768 build now correctly rejects
+them rather than reading their layout incorrectly. Scratch baseline for 1024 was
+archived from targeted, changing only HIDDEN to 1024 (plus workspace membership for
+the isolated build); no search/evaluation algorithms changed.
+
+Validation (PC, short runs, at most two workers/build jobs, below-normal engines):
+- `cargo test`: all 10 tests pass, including sampling, duplicate bound, line/result
+  preservation, blend and loader size tests; release build passes.
+- `tools/tests/test-prepare-data.ps1`: native and fallback tests pass, including
+  SampleRate+cap, source-tail coverage, gzip/CRLF/partial tails and exact 95/5 shares.
+- `tools/tests/test-rescore.ps1`: multiworker text/gzip equivalence, results, old/new
+  mate/check filtering, checkpoint-prefix resume and torn-output recovery pass.
+- Startpos + e2e4 c7c5 g1f3, depth 15, one thread: 768 embedded before/after **128,360**
+  nodes, same -58 score/PV; 1024 + v2.3 before/after **129,751** nodes, same -73
+  score/PV. v2.2 also loads/searches successfully (150,843 nodes on this position).
+- Default depth-10 bench before/after **81,976** nodes. Seeded default datagen game
+  before/after is byte-identical (57 records, SHA256
+  A8C726874CF666EF2FA7C19A0CED279D9B5CC8E997239D5DCDE837FFFF1E276A).
+- One-game 20k soft / 400k hard smoke with keep-every 4, cap 3, dup-cap 2:
+  125 plies, 4,336,453 nodes, exactly 3 saved records; settings in status.txt.
+
+No Elo claim, deployment, cloud launch, push, existing-process changes or ARM runtime
+verification. Native preparation stays streaming/bounded but requires two input
+passes (extra I/O, gzip decompressed twice); throughput was not benchmarked at scale.
+Duplicate caps can saturate/collide conservatively and reset on process restart;
+recommended primary-run setting remains off. Rescore requires frozen inputs and its
+sidecars, and one writer per output. Run recipes and mixing examples: DATAGEN2.md.
