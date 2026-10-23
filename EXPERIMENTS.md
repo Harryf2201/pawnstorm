@@ -152,3 +152,5 @@ as White, 7.Bg5 in the QGD exchange line).
 | Exact speed-ups (Codex): aarch64 TT prefetch, null-child prefetch, node-local history keys, SEE reuse | Node-identical on PC and ARM; ARM +6-7% nps, PC +0.7% | Kept: merged into w1024, on the bot from Oct 22 00:29 | branch speed1 |
 | Second gen7 net (25% gen7, 240 sb) vs v2.2 | Hold-out 0.010516; +0.9 +/- 5.6 (3600 g, 8+0.08), -8.4 +/- 8.2 (1200 g, 40+0.4) | Dropped: more gen7 alone didn't help yet | net-g567b-1024 |
 | Same gen7 mix at 480 sb vs v2.2 | Hold-out 0.010540; +3.5 +/- 6.0 (3600 g, 8+0.08), +1.5 +/- 9.0 (1200 g, 40+0.4) | Not clearly better: v2.2 stays on the bot | net-g567b-480 |
+| Gen7 + ~4% targeted king-attack data (gen7k), 480 sb vs v2.2 | Hold-out 0.010657; +6.8 +/- 5.1 (3962 g, 8+0.08, PC, LLR 1.94 when cut off), +3.8 +/- 8.0 (1200 g, 40+0.4) | Kept: v2.3, on the bot from Oct 23 13:10 UTC (owner's call) | net-g567k-1024-sb480 |
+| Repetition: game-history positions need a threefold (search-path repeats still draw) vs v2.2 | -2.9 +/- 5.1 (3600 g, 8+0.08) | Not deployed: no gain in self-play (history repeats are rare there); revisit with v2.3 or at longer TC | branch rep3 |
