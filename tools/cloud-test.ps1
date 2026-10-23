@@ -11,7 +11,9 @@ param(
     [string]$TC = '8+0.08',
     [int]$Rounds = 300,
     [int]$Jobs = 6,
-    [string]$Notes = ''
+    [string]$Notes = '',
+    # Reattach to a run that is already queued or running (e.g. after this script was killed): skips upload and start.
+    [long]$RunId = 0
 )
 . "$PSScriptRoot\paths.ps1"
 $ErrorActionPreference = 'Stop'
@@ -20,6 +22,8 @@ $tmp = Join-Path $LabRoot "cloud-tests\$([DateTimeOffset]::Now.ToUnixTimeSeconds
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
 # 1. Upload both specs (network, options, commit to build) to the testkit release.
+$id = $RunId
+if (-not $id) {
 foreach ($s in @(@($Dev, $DevRef), @($Base, $BaseRef))) {
     $spec, $ref = $s
     $sha = (git rev-parse "$ref^{commit}").Trim()
@@ -32,7 +36,6 @@ foreach ($s in @(@($Dev, $DevRef), @($Base, $BaseRef))) {
 # 2. Start the run and find its id.
 $before = (Get-Date).ToUniversalTime()
 gh workflow run test-match.yml -f dev=$Dev -f base=$Base -f tc=$TC -f rounds=$Rounds -f jobs=$Jobs -f label=$Name | Out-Null
-$id = $null
 for ($i = 0; $i -lt 30 -and -not $id; $i++) {
     Start-Sleep 10
     $runs = gh run list --workflow test-match.yml -L 5 --json databaseId,createdAt,displayTitle | ConvertFrom-Json
@@ -40,6 +43,7 @@ for ($i = 0; $i -lt 30 -and -not $id; $i++) {
 }
 if (-not $id) { throw 'could not find the started run' }
 "cloud run $id started"
+} else { "reattached to cloud run $id" }
 
 # 3. Wait for it, then combine the shards.
 do { Start-Sleep 120; $st = (gh run view $id --json status | ConvertFrom-Json).status } while ($st -ne 'completed')
