@@ -43,6 +43,10 @@ params! {
     TtPvLmr = 1, 0, 2;
     DeeperMargin = 41, 10, 100;
     TmForcedDepth = 4, 0, 8;
+    // Evaluation experiments (Oct 24): identity defaults.
+    SprEvalScale = 100, 50, 200;
+    SprMatScale = 0, 0, 1024;
+    SprOptimism = 0, 0, 200;
     // Search sprint 1 (Oct 19): each 0 = off.
     SprFhDepth = 0, 0, 1;
     SprCaptSeeDiv = 0, 0, 256;

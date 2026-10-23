@@ -56,6 +56,19 @@ mod tt_eval_tests {
     }
 
     #[test]
+    fn cached_eval_uses_current_thread_optimism() {
+        let (b, mut s) = position();
+        s.tt.store(b.hash, Move::NULL, -1000, 1000, 0, BOUND_UPPER, false);
+        s.optimism = [200, -200];
+        // The lone queen has material 36/264, adding 27 cp after the halfmove fade.
+        assert_eq!(s.qsearch(&b, 500, 600, 1), 627);
+        s.optimism = [-200, 200];
+        assert_eq!(s.qsearch(&b, 500, 550, 1), 573);
+        assert_eq!(s.tt.probe(b.hash).unwrap().eval, 1000);
+        assert_eq!(Searcher::eval_material(&Board::startpos()), 264);
+    }
+
+    #[test]
     fn stored_eval_is_independent_of_halfmove_clock() {
         let (late, mut s) = position();
         let expected = if nnue::active() {
@@ -146,6 +159,8 @@ pub struct Searcher {
     cont_corr: Box<[[i32; CORR_SIZE]; 2]>,
     /// NNUE accumulators per ply.
     acc: Vec<AccPair>,
+    /// Per-thread, fixed throughout each iteration; never cached in TT.
+    optimism: [i32; 2],
     /// Nodes spent below each root move (from, to) in this search, for time management.
     root_nodes: Box<[[u64; 64]; 64]>,
     /// Whether the soft limit comes from a game clock (and may be stretched or shortened).
@@ -309,6 +324,7 @@ impl Searcher {
             shared_nodes: Arc::new(AtomicU64::new(0)),
             helper_nodes: Vec::new(),
             nmp_min_ply: 0,
+            optimism: [0; 2],
             overhead_ms: 10,
             ponder: Arc::new(AtomicBool::new(false)),
             pondering: false,
@@ -376,12 +392,12 @@ impl Searcher {
         if p(P::CorrMajorW) > 0 {
             c += self.major_corr[s][pieces_key(b, &[ROOK, QUEEN, KING])] * p(P::CorrMajorW);
         }
-        (Self::fade_eval(b, raw) + c / (CORR_GRAIN * 256)).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+        (self.adjusted_eval(b, raw) + c / (CORR_GRAIN * 256)).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
     /// Moves every correction for this position towards (search score - raw static eval).
     fn update_corr(&mut self, b: &Board, raw: i32, score: i32, depth: i32, keys: &CorrKeys) {
-        let diff = (score - Self::fade_eval(b, raw)) * CORR_GRAIN;
+        let diff = (score - self.adjusted_eval(b, raw)) * CORR_GRAIN;
         let w = (depth + 1).min(16);
         let upd = |e: &mut i32| *e = ((*e * (CORR_WEIGHT_SCALE - w) + diff * w) / CORR_WEIGHT_SCALE).clamp(-CORR_MAX, CORR_MAX);
         let s = b.stm;
@@ -456,7 +472,8 @@ impl Searcher {
         false
     }
 
-    /// TT static evaluations must not depend on the halfmove clock (not in the key).
+    /// TT static evaluations exclude halfmove fade, experimental scales and thread optimism.
+    /// Apply these on every use, including TT hits, before correction history.
     fn raw_eval(&self, b: &Board, ply: usize) -> i32 {
         let e = if nnue::active() { nnue::evaluate(&self.acc[ply], b.stm, b.occ().count_ones()) } else { evaluate(b) };
         e.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
@@ -467,8 +484,29 @@ impl Searcher {
         raw * (200 - b.halfmove.min(100) as i32) / 200
     }
 
+    /// Quarter-pawn units: P=1 (light weight), N/B=12, R=20, Q=36, K=0.
+    /// Both colors together start at REF=264; promotions may exceed this value.
+    fn eval_material(b: &Board) -> i32 {
+        [1, 12, 12, 20, 36, 0].iter().enumerate()
+            .map(|(pt, w)| b.pieces[pt].count_ones() as i32 * w).sum()
+    }
+
+    fn adjusted_eval(&self, b: &Board, raw: i32) -> i32 {
+        const REF: i32 = 264;
+        let mut e = Self::fade_eval(b, raw) * p(P::SprEvalScale) / 100;
+        let mat_scale = p(P::SprMatScale);
+        if mat_scale > 0 || self.optimism[b.stm] != 0 {
+            let material = Self::eval_material(b);
+            if mat_scale > 0 {
+                e = e * (mat_scale + material) / (mat_scale + REF);
+            }
+            e += self.optimism[b.stm] * material / REF;
+        }
+        e.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+    }
+
     fn eval(&self, b: &Board, ply: usize) -> i32 {
-        Self::fade_eval(b, self.raw_eval(b, ply))
+        self.adjusted_eval(b, self.raw_eval(b, ply))
     }
 
     /// Fills the accumulators for ply + 1 after `mv` is played from `b` at `ply`.
@@ -590,6 +628,7 @@ impl Searcher {
         self.setup_time(limits, board.stm);
         self.pondering = self.main_thread && self.ponder.load(Ordering::Relaxed);
         self.ponder_move = Move::NULL;
+        self.optimism = [0; 2];
         if self.main_thread {
             self.tt.new_search();
         }
@@ -646,6 +685,10 @@ impl Searcher {
         let mut prev_best = Move::NULL;
 
         for depth in 1..=max_depth {
+            // Previous completed root score, frozen across aspiration re-searches.
+            let optimism = p(P::SprOptimism) * score / (score.abs() + 100);
+            self.optimism[board.stm] = optimism;
+            self.optimism[board.stm ^ 1] = -optimism;
             let mut delta = p(P::AspDelta);
             let (mut alpha, mut beta) = if depth >= 4 { (score - delta, score + delta) } else { (-INF, INF) };
             // Sprint: after a fail-high, re-search slightly shallower (the score is already known to be good).
@@ -825,7 +868,7 @@ impl Searcher {
                 _ => self.raw_eval(b, ply),
             };
             static_eval = self.corrected(b, raw_eval, &keys);
-            corr_mag = (static_eval - Self::fade_eval(b, raw_eval)).abs();
+            corr_mag = (static_eval - self.adjusted_eval(b, raw_eval)).abs();
             eval = static_eval;
             // A TT score is a better estimate than the static eval when its bound allows it.
             if let Some(e) = tt_entry {

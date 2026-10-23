@@ -182,3 +182,23 @@ passed with `RUSTFLAGS="-C target-cpu=generic"` to override this x86 PC's native
 `cargo test --release --lib` passed all four existing tests; `git diff --check` passed.
 Local binaries, verification script, per-position UCI logs and JSON measurements are retained under ignored
 `target/speed1/` in this worktree (reported speed samples are pairs 4-9).
+
+## Oct 24: evaluation scaling experiments (xeval)
+
+Three independent UCI spin options on the deployed w1024/v2.1 base; no release or Elo claim.
+SprEvalScale (100, 50..200) multiplies the faded evaluation by percent. SprMatScale
+(0/off, 0..1024) multiplies by (option + material)/(option + 264). Material counts both
+colors: P=1, N/B=12, R=20, Q=36, K=0 (quarter-pawn units, pawns weighted lightly).
+SprOptimism (0/off, 0..200) uses option * previous_root_score/(abs(score)+100), assigned
+with opposite signs to the two colors at iteration entry, then adds side-to-move optimism
+* material/264. Each thread owns its optimism, frozen across aspiration re-searches.
+All adjustments precede correction history; TT evals remain raw and adjustments are reapplied
+on use, like the existing halfmove fade. Correction learning uses the same adjusted baseline.
+
+Validation: cargo build --release; cargo test (5 passed, including current-thread optimism
+on a cached raw eval); git diff --check. Threads 1, requested pawnstorm-g567k-480.nnue,
+startpos moves e2e4 c7c5 g1f3, depth 15: before 129751 nodes, after 129751 nodes,
+both -73 cp with identical PV and bestmove d7d6. All iteration search fields matched
+apart from timing/NPS. Each option also completed a separate enabled depth-8 smoke search.
+Logs and the short validation script are in ignored target/xeval-*.log and target/parity.ps1.
+No tournament or ARM run; no strength conclusions.
